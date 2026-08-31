@@ -8,17 +8,6 @@ export const MAX_OUTPUT_BYTES = 256 * 1024;
 export const MAX_TIMEOUT_MS = 60_000;
 
 const RESTRICTED_COMMANDS = new Set(['git', 'npm', 'pnpm', 'yarn']);
-const FULL_ACCESS_COMMANDS = new Set([
-  ...RESTRICTED_COMMANDS,
-  'node',
-  'npx',
-  'bun',
-  'deno',
-  'python',
-  'python3',
-  'pip',
-  'pip3'
-]);
 
 function validateExecutableName(command) {
   if (command.includes('/') || command.includes('\\') || path.basename(command) !== command) {
@@ -35,17 +24,13 @@ function validateRestrictedArgs(command, args) {
   }
 }
 
-export function validateCommandPolicy(command, args, { fullAccess = false } = {}) {
+export function validateCommandPolicy(command, args, { fullAccess = false, allowCustomCommand = false } = {}) {
   validateExecutableName(command);
-  const allowedCommands = fullAccess ? FULL_ACCESS_COMMANDS : RESTRICTED_COMMANDS;
-  if (!allowedCommands.has(command)) {
-    throw new Error(
-      fullAccess
-        ? `Command is not allowed. Allowed commands: ${[...FULL_ACCESS_COMMANDS].join(', ')}`
-        : `Command is not allowed in restricted mode. Allowed commands: ${[...RESTRICTED_COMMANDS].join(', ')}`
-    );
+  if (fullAccess || allowCustomCommand) return;
+  if (!RESTRICTED_COMMANDS.has(command)) {
+    throw new Error(`Command is not allowed in restricted mode: ${command}`);
   }
-  if (!fullAccess) validateRestrictedArgs(command, args);
+  validateRestrictedArgs(command, args);
 }
 
 function resolveExecutable(command) {
@@ -62,7 +47,6 @@ function executeFile(executable, args, options) {
         reject(new Error(`Failed to start ${executable}: ${error.message}`));
         return;
       }
-
       resolve({
         exitCode: error && typeof error.code === 'number' ? error.code : 0,
         signal: error?.signal ?? null,
@@ -75,35 +59,49 @@ function executeFile(executable, args, options) {
 }
 
 export function createCommandService({ root, fullAccess = false }) {
-  return async function runCommand({ command, args = [], cwd = '.', timeoutMs = 15_000 }) {
-    validateCommandPolicy(command, args, { fullAccess });
+  return async function runCommand({ command, args = [], cwd = '.', timeoutMs = 15_000 }, context = {}) {
+    validateCommandPolicy(command, args, { fullAccess, allowCustomCommand: context.allowCustomCommand });
 
-    const resolvedCwd = await resolveSafePath(root, cwd);
+    const resolvedCwd = context.pathInfo?.resolved ?? await resolveSafePath(root, cwd);
     const cwdStat = await stat(resolvedCwd);
-    if (!cwdStat.isDirectory()) {
-      throw new Error('cwd must be a directory.');
-    }
+    if (!cwdStat.isDirectory()) throw new Error('cwd must be a directory.');
+
+    context.eventBus?.emit('process.started', {
+      requestId: context.requestId,
+      command,
+      args,
+      cwd: resolvedCwd,
+      sandboxed: false
+    });
+
+    const execution = await executeFile(resolveExecutable(command), args, {
+      cwd: resolvedCwd,
+      timeout: timeoutMs,
+      maxBuffer: MAX_OUTPUT_BYTES,
+      windowsHide: true,
+      encoding: 'utf8',
+      shell: false
+    });
+
+    context.eventBus?.emit('process.completed', {
+      requestId: context.requestId,
+      command,
+      exitCode: execution.exitCode,
+      timedOut: execution.timedOut
+    });
 
     return {
       command,
       args,
       cwd: path.relative(root, resolvedCwd) || '.',
-      mode: fullAccess ? 'full_access' : 'restricted',
-      ...(await executeFile(resolveExecutable(command), args, {
-        cwd: resolvedCwd,
-        timeout: timeoutMs,
-        maxBuffer: MAX_OUTPUT_BYTES,
-        windowsHide: true,
-        encoding: 'utf8',
-        shell: false
-      }))
+      mode: fullAccess ? 'full_access' : context.allowCustomCommand ? 'custom_rule' : 'restricted',
+      ...execution
     };
   };
 }
 
 export const commandLimits = {
   restrictedCommands: [...RESTRICTED_COMMANDS],
-  fullAccessCommands: [...FULL_ACCESS_COMMANDS],
   maxOutputBytes: MAX_OUTPUT_BYTES,
   maxTimeoutMs: MAX_TIMEOUT_MS
 };

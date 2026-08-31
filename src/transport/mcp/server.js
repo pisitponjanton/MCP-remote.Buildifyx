@@ -3,7 +3,8 @@ import { createRequire } from 'node:module';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { createRuntime } from '../../core/runtime.js';
-import { registerMcpTools } from './tools/index.js';
+import { createToolManifest, registerMcpToolRegistry } from './tools/index.js';
+import { inspectToolManifest } from './manifest-store.js';
 
 const require = createRequire(import.meta.url);
 const { version: packageVersion } = require('../../../package.json');
@@ -18,15 +19,20 @@ export function isAllowedOrigin(origin) {
   }
 }
 
-export function buildMcpServer({ root, fullAccess = false, permissions }) {
-  const runtime = createRuntime({ root, fullAccess, permissions });
+export function buildMcpServer({ runtime, root, fullAccess = false, policy, manifest }) {
+  const activeRuntime = runtime ?? createRuntime({ root, fullAccess, policy });
+  const activeManifest = manifest ?? createToolManifest({ fullAccess: activeRuntime.fullAccess });
   const server = new McpServer({ name: 'buildifyx-desktop-agent', version: packageVersion });
-  registerMcpTools(server, runtime.dispatch, { fullAccess });
-  return { server, runtime };
+  registerMcpToolRegistry(server, activeRuntime.dispatch, { fullAccess: activeRuntime.fullAccess });
+  return { server, runtime: activeRuntime, manifest: activeManifest };
 }
 
-export async function startMcpServer({ root, port, fullAccess = false, permissions }) {
-  const handler = createMcpHandler(() => buildMcpServer({ root, fullAccess, permissions }).server, {
+export async function startMcpServer({ root, port, fullAccess = false, policy, runtime, quiet = false }) {
+  const activeRuntime = runtime ?? createRuntime({ root, fullAccess, policy });
+  const manifest = createToolManifest({ fullAccess: activeRuntime.fullAccess });
+  const manifestState = await inspectToolManifest(manifest);
+
+  const handler = createMcpHandler(() => buildMcpServer({ runtime: activeRuntime, manifest }).server, {
     responseMode: 'json'
   });
   const nodeHandler = toNodeHandler(handler);
@@ -36,9 +42,31 @@ export async function startMcpServer({ root, port, fullAccess = false, permissio
 
     if (url.pathname === '/health' && req.method === 'GET') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, version: packageVersion, mode: fullAccess ? 'full_access' : 'restricted' }));
+      res.end(JSON.stringify({
+        ok: true,
+        version: packageVersion,
+        mode: activeRuntime.fullAccess ? 'full_access' : 'restricted',
+        tools: {
+          count: manifest.count,
+          hash: manifest.hash,
+          shortHash: manifest.shortHash,
+          changedSinceLastRun: manifestState.changed
+        }
+      }));
       return;
     }
+
+    if (url.pathname === '/tools' && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        version: packageVersion,
+        changedSinceLastRun: manifestState.changed,
+        previousHash: manifestState.previousHash,
+        ...manifest
+      }, null, 2));
+      return;
+    }
+
     if (url.pathname !== '/mcp') {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not found' }));
@@ -57,18 +85,30 @@ export async function startMcpServer({ root, port, fullAccess = false, permissio
     httpServer.listen(port, '127.0.0.1', resolve);
   });
 
-  console.log('Buildifyx Desktop Agent');
-  console.log(`Version: ${packageVersion}`);
-  console.log(`Root:    ${root}`);
-  console.log(`MCP:     http://127.0.0.1:${port}/mcp`);
-  console.log(`Health:  http://127.0.0.1:${port}/health`);
-  console.log(`Mode:    ${fullAccess ? 'FULL ACCESS (not sandboxed)' : 'restricted'}`);
-  if (fullAccess) console.log('Warning: commands may access anything available to the current OS user.');
+  if (!quiet) {
+    console.log('Buildifyx Desktop Agent');
+    console.log(`Version: ${packageVersion}`);
+    console.log(`Root:    ${root}`);
+    console.log(`MCP:     http://127.0.0.1:${port}/mcp`);
+    console.log(`Health:  http://127.0.0.1:${port}/health`);
+    console.log(`Tools:   ${manifest.count} (${manifest.shortHash})${manifestState.changed ? ' CHANGED' : ''}`);
+    console.log(`Mode:    ${activeRuntime.fullAccess ? 'FULL ACCESS (not sandboxed)' : 'restricted'}`);
+  }
 
   async function close() {
     await handler.close();
     await new Promise((resolve) => httpServer.close(resolve));
   }
 
-  return { close, httpServer };
+  return {
+    close,
+    httpServer,
+    runtime: activeRuntime,
+    version: packageVersion,
+    manifest,
+    manifestState,
+    mcpUrl: `http://127.0.0.1:${port}/mcp`,
+    healthUrl: `http://127.0.0.1:${port}/health`,
+    toolsUrl: `http://127.0.0.1:${port}/tools`
+  };
 }

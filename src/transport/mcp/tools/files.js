@@ -1,6 +1,5 @@
 import * as z from 'zod/v4';
 import { MAX_TEXT_FILE_BYTES } from '../../../services/files.js';
-import { errorResult, successResult } from '../response.js';
 
 const FilePath = z.string().min(1).describe('Path relative to the configured root directory.');
 
@@ -18,21 +17,39 @@ const schemas = {
   ])
 };
 
-export function registerFileTools(server, dispatch) {
-  const definitions = [
-    ['list_directory', 'List directory', 'List files and folders inside the configured root directory.', { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }],
-    ['read_file', 'Read file', `Read one UTF-8 text file inside the configured root. Files are limited to ${MAX_TEXT_FILE_BYTES} bytes.`, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }],
-    ['write_file', 'Write file', `Create one new UTF-8 text file inside the configured root. Existing files are never overwritten.`, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }],
-    ['edit_file', 'Edit file', 'Edit an existing UTF-8 text file inside the configured root.', { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }]
+export function getFileToolDefinitions() {
+  return [
+    {
+      name: 'list_directory',
+      title: 'List directory',
+      description: 'List files and folders inside the configured root directory.',
+      permission: 'read',
+      inputSchema: schemas.list_directory,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    },
+    {
+      name: 'read_file',
+      title: 'Read file',
+      description: `Read one UTF-8 text file inside the configured root. Files are limited to ${MAX_TEXT_FILE_BYTES} bytes.`,
+      permission: 'read',
+      inputSchema: schemas.read_file,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    },
+    {
+      name: 'write_file',
+      title: 'Write file',
+      description: 'Create one new UTF-8 text file inside the configured root. Existing files are never overwritten.',
+      permission: 'write',
+      inputSchema: schemas.write_file,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+    },
+    {
+      name: 'edit_file',
+      title: 'Edit file',
+      description: 'Edit an existing UTF-8 text file inside the configured root.',
+      permission: 'write',
+      inputSchema: schemas.edit_file,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
+    }
   ];
-
-  for (const [name, title, description, annotations] of definitions) {
-    server.registerTool(name, { title, description, inputSchema: schemas[name], annotations }, async (input) => {
-      try {
-        return successResult(await dispatch(name, input));
-      } catch (error) {
-        return errorResult(error);
-      }
-    });
-  }
 }

@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 import { MAX_OUTPUT_BYTES, MAX_TIMEOUT_MS } from '../../../services/commands.js';
-import { errorResult, successResult } from '../response.js';
+import { successResult } from '../response.js';
 
 const RunCommandInput = z.object({
   command: z.string().min(1).describe('Allowed executable name. Paths and shell command strings are not accepted.'),
@@ -9,29 +9,25 @@ const RunCommandInput = z.object({
   timeoutMs: z.number().int().min(100).max(MAX_TIMEOUT_MS).default(15_000)
 });
 
-export function registerCommandTools(server, dispatch, { fullAccess = false } = {}) {
-  server.registerTool(
-    'run_command',
+export function getCommandToolDefinitions({ fullAccess = false } = {}) {
+  return [
     {
+      name: 'run_command',
       title: 'Run command',
       description: fullAccess
-        ? `Run an allowlisted command in FULL ACCESS mode. Commands are not sandboxed. Timeout: ${MAX_TIMEOUT_MS} ms; output: ${MAX_OUTPUT_BYTES} bytes per stream.`
-        : `Run a restricted developer command without a shell. cwd must stay inside the configured root. Timeout: ${MAX_TIMEOUT_MS} ms; output: ${MAX_OUTPUT_BYTES} bytes per stream.`,
+        ? `Run a command in FULL ACCESS mode. Commands are not sandboxed. Timeout: ${MAX_TIMEOUT_MS} ms; output: ${MAX_OUTPUT_BYTES} bytes per stream.`
+        : `Run a restricted developer command without a shell. cwd must stay inside an allowed root unless approved. Timeout: ${MAX_TIMEOUT_MS} ms; output: ${MAX_OUTPUT_BYTES} bytes per stream.`,
+      permission: 'command',
       inputSchema: RunCommandInput,
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
         openWorldHint: true
-      }
-    },
-    async (input) => {
-      try {
-        const result = await dispatch('run_command', input);
+      },
+      toMcpResult(result) {
         return successResult(result, { isError: result.exitCode !== 0 || result.timedOut });
-      } catch (error) {
-        return errorResult(error);
       }
     }
-  );
+  ];
 }

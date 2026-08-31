@@ -28,7 +28,8 @@ export function parsePort(value = '3333') {
 
 export function parseInvocation(argv) {
   const first = argv[0];
-  if (!first || first.startsWith('--root') || first.startsWith('--port') || first === '--full-access') {
+  const remoteFlags = new Set(['--root', '--port', '--full-access', '--no-tui']);
+  if (!first || remoteFlags.has(first)) {
     return { command: 'remote', args: argv };
   }
   return { command: first, args: argv.slice(1) };
