@@ -119,6 +119,29 @@ export function replaceCharacters(content, start, end, replacement) {
   return content.slice(0, startOffset) + replacement + content.slice(endOffset);
 }
 
+export async function createUtf8File(filePath, content) {
+  const byteLength = Buffer.byteLength(content, 'utf8');
+  if (byteLength > MAX_TEXT_FILE_BYTES) {
+    throw new Error(`File exceeds the ${MAX_TEXT_FILE_BYTES}-byte limit.`);
+  }
+
+  let handle;
+  try {
+    handle = await open(filePath, 'wx', 0o644);
+    await handle.writeFile(content, 'utf8');
+    await handle.sync();
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'EEXIST') {
+      throw new Error('File already exists.');
+    }
+    throw error;
+  } finally {
+    if (handle) {
+      await handle.close();
+    }
+  }
+}
+
 export async function writeUtf8FileAtomic(filePath, content) {
   const byteLength = Buffer.byteLength(content, 'utf8');
   if (byteLength > MAX_TEXT_FILE_BYTES) {

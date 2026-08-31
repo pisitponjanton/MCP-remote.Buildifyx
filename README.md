@@ -7,23 +7,27 @@ ChatGPT
   ↓
 OpenAI Secure MCP Tunnel
   ↓ outbound HTTPS
-buildifyx-agent remote
+bdxa remote
   ↓
 Local machine (configured root)
 ```
 
-This MVP intentionally does **not** include SaaS, user accounts, OAuth, device registry, or shell execution.
+This MVP intentionally does **not** include SaaS, user accounts, OAuth, or device registry.
 
 ## Tools
 
 - `get_system_info`
 - `list_directory`
 - `read_file`
+- `write_file`
 - `edit_file`
+- `run_command`
 
-`get_system_info`, `list_directory`, and `read_file` are read-only. `edit_file` can overwrite a file, replace an inclusive line range, or replace a character range using one-based line and column positions. File tools are constrained to the root directory passed to the CLI, including protection against `..` traversal, symlink escape, and access to `.git` internals.
+`get_system_info`, `list_directory`, and `read_file` are read-only. `write_file` creates new UTF-8 text files without overwriting existing files. `edit_file` can overwrite a file, replace an inclusive line range, or replace a character range using one-based line and column positions. File tools are constrained to the root directory passed to the CLI, including protection against `..` traversal, symlink escape, and access to `.git` internals.
 
-Text reads and edits support existing UTF-8 files up to 1 MiB. Binary files, file creation, deletion, and renaming are not supported. Writes are applied immediately and atomically, so configure `--root` as narrowly as possible.
+`run_command` executes allowlisted developer commands with `execFile`, `shell: false`, a bounded timeout, bounded output, and a working directory constrained to the configured root.
+
+Text reads and writes support UTF-8 files up to 1 MiB. Binary files, deletion, and renaming are not supported. Writes are applied atomically where applicable, so configure `--root` as narrowly as possible.
 
 ## Requirements
 
@@ -41,8 +45,8 @@ npm link
 Then:
 
 ```bash
-buildifyx-agent doctor --root ~/projects
-buildifyx-agent remote --root ~/projects --port 3333
+bdxa doctor --root ~/projects
+bdxa remote --root ~/projects --port 3333
 ```
 
 You should see:
@@ -52,7 +56,7 @@ Buildifyx Desktop Agent
 Root:   /your/path/projects
 MCP:    http://127.0.0.1:3333/mcp
 Health: http://127.0.0.1:3333/health
-Mode:   private / root-scoped read-write
+Mode:   private / root-scoped read-write-command
 ```
 
 Check health:
@@ -70,7 +74,7 @@ ChatGPT does not connect directly to localhost MCP servers. For a developer mach
 3. Start this MCP CLI:
 
 ```bash
-buildifyx-agent remote --root ~/projects --port 3333
+bdxa remote --root ~/projects --port 3333
 ```
 
 4. Configure the tunnel client to point at the local HTTP MCP endpoint. OpenAI's current tunnel-client docs use `--mcp-server-url` for HTTP servers. Conceptually:
@@ -90,7 +94,7 @@ tunnel-client run --profile buildifyx-local
 Use `tunnel-client help quickstart` if the exact CLI flags in your installed version differ.
 
 5. In ChatGPT developer-mode app creation, choose **Tunnel** as the connection type and select/paste the tunnel ID.
-6. Scan tools. You should see `get_system_info`, `list_directory`, `read_file`, and `edit_file`.
+6. Scan tools. You should see `get_system_info`, `list_directory`, `read_file`, `write_file`, `edit_file`, and `run_command`.
 7. Test with prompts such as:
 
 ```text
@@ -129,8 +133,8 @@ At that point this package becomes the local Agent rather than the MCP endpoint 
 
 - Binds only to `127.0.0.1`.
 - Rejects non-local browser `Origin` headers.
-- No shell execution.
+- `run_command` does not invoke a shell and only allows explicit executable names.
 - File access stays under `--root` after realpath/symlink resolution.
 - `.git` internals cannot be listed, read, or edited through file tools.
-- Edits are limited to existing UTF-8 text files no larger than 1 MiB.
+- Text files are limited to 1 MiB.
 - Secure MCP Tunnel is preferred over exposing the local port publicly.

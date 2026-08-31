@@ -1,10 +1,11 @@
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import * as z from 'zod/v4';
-import { resolveSafePath } from '../security/path.js';
+import { resolveSafeNewFilePath, resolveSafePath } from '../security/path.js';
 import {
   MAX_TEXT_FILE_BYTES,
   countTextLines,
+  createUtf8File,
   readUtf8File,
   replaceCharacters,
   replaceLines,
@@ -20,6 +21,11 @@ const FilePath = z.string().min(1).describe('Path relative to the configured roo
 
 const ReadFileInput = z.object({
   path: FilePath
+});
+
+const WriteFileInput = z.object({
+  path: FilePath,
+  content: z.string().describe('UTF-8 text content for the new file.')
 });
 
 const Position = z.object({
@@ -104,10 +110,7 @@ export function registerFileTools(server, { root }) {
           structuredContent: result
         };
       } catch (error) {
-        return {
-          content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
-          isError: true
-        };
+        return toolError(error);
       }
     }
   );
@@ -134,6 +137,41 @@ export function registerFileTools(server, { root }) {
           size: Buffer.byteLength(content, 'utf8'),
           lineCount: countTextLines(content),
           content
+        };
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          structuredContent: result
+        };
+      } catch (error) {
+        return toolError(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    'write_file',
+    {
+      title: 'Write file',
+      description: `Create one new UTF-8 text file inside the configured root directory. Existing files are never overwritten. Files are limited to ${MAX_TEXT_FILE_BYTES} bytes.`,
+      inputSchema: WriteFileInput,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ path: requestedPath, content }) => {
+      try {
+        const target = await resolveSafeNewFilePath(root, requestedPath);
+        await createUtf8File(target, content);
+
+        const result = {
+          path: path.relative(root, target) || '.',
+          created: true,
+          size: Buffer.byteLength(content, 'utf8'),
+          lineCount: countTextLines(content)
         };
 
         return {

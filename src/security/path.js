@@ -34,3 +34,28 @@ export async function resolveSafePath(root, userPath = '.') {
 
   return canonical;
 }
+
+export async function resolveSafeNewFilePath(root, userPath) {
+  const requested = path.resolve(root, userPath);
+
+  if (!isInsideRoot(root, requested)) {
+    throw new Error('Path is outside the allowed root directory.');
+  }
+
+  if (isGitInternalPath(root, requested)) {
+    throw new Error('Access to .git internals is not allowed.');
+  }
+
+  const requestedParent = path.dirname(requested);
+  const canonicalParent = await realpath(requestedParent);
+
+  if (!isInsideRoot(root, canonicalParent)) {
+    throw new Error('Resolved parent path is outside the allowed root directory.');
+  }
+
+  if (isGitInternalPath(root, canonicalParent)) {
+    throw new Error('Access to .git internals is not allowed.');
+  }
+
+  return path.join(canonicalParent, path.basename(requested));
+}

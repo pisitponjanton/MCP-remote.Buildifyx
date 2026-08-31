@@ -3,6 +3,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { registerSystemTools } from './tools/system.js';
 import { registerFileTools } from './tools/files.js';
+import { registerCommandTools } from './tools/commands.js';
 
 function isAllowedOrigin(origin) {
   if (!origin) return true; // server-to-server calls normally have no Origin
@@ -17,11 +18,12 @@ function isAllowedOrigin(origin) {
 function buildMcpServer({ root }) {
   const server = new McpServer({
     name: 'buildifyx-desktop-agent',
-    version: '0.0.1'
+    version: '0.1.0'
   });
 
   registerSystemTools(server, { root });
   registerFileTools(server, { root });
+  registerCommandTools(server, { root });
   return server;
 }
 
@@ -64,7 +66,7 @@ export async function startMcpServer({ root, port }) {
   console.log(`Root:   ${root}`);
   console.log(`MCP:    http://127.0.0.1:${port}/mcp`);
   console.log(`Health: http://127.0.0.1:${port}/health`);
-  console.log('Mode:   private / root-scoped read-write');
+  console.log('Mode:   private / root-scoped read-write-command');
   console.log('\nKeep this process running while the Secure MCP Tunnel is connected.');
 
   const shutdown = async () => {
