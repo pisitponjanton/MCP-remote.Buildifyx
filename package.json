@@ -1,0 +1,28 @@
+{
+  "name": "@buildifyx/desktop-agent",
+  "version": "0.0.1",
+  "description": "Private local MCP agent for connecting a developer machine to ChatGPT through Secure MCP Tunnel.",
+  "type": "module",
+  "bin": {
+    "buildifyx-agent": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node ./src/cli.js remote",
+    "doctor": "node ./src/cli.js doctor",
+    "check": "node --check ./src/cli.js && node --check ./src/server.js && node --check ./src/security/path.js && node --check ./src/tools/system.js && node --check ./src/tools/files.js && node --check ./src/tools/text.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "4.5.4"
+  },
+  "license": "MIT"
+}
