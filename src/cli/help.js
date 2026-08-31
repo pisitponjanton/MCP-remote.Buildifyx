@@ -2,40 +2,49 @@ export function printHelp() {
   console.log(`bdxa — Buildifyx Desktop Agent
 
 Usage:
-  bdxa [command] [options]
-  buildifyx-agent [command] [options]
+  bdxa [options]
+  bdxa <command> [options]
 
 Default:
-  Running bdxa with no command starts remote mode with the interactive TUI when a terminal is available.
+  Running bdxa connects this device to Buildifyx Cloud at bdxa.buildifyx.com.
+  Login once with a one-time token before connecting.
 
 Commands:
-  remote, r   Start the private MCP HTTP server on 127.0.0.1
+  login       Authenticate this device with a login token
+  logout      Revoke this device credential and remove it locally
+  status      Show device authentication status
+  connect     Connect to Buildifyx Cloud (same as default bdxa)
+  local       Start the legacy local MCP HTTP server for development
   doctor, d   Check environment, root access, and package version
-  update, u   Update Buildifyx Desktop Agent to the latest npm version
+  update, u   Update Buildifyx Desktop Agent from npm
   help        Show this help message
 
 Global options:
   -h, --help        Show help
   -v, --version     Show installed version
 
-Remote options:
+Cloud options:
   --root <path>     Primary workspace root (default: current directory)
-  --port <number>   Local MCP port (default: 3333)
-  --full-access     Permit arbitrary executable names; command execution is not sandboxed.
-  --no-tui          Disable the interactive TUI. Ask permissions return confirmation errors.
+  --full-access     Permit arbitrary executable names; execution is not sandboxed
+  --no-tui          Disable the interactive TUI; ASK returns confirmation-required
 
-TUI shortcuts:
-  1 / a             Activity
-  2 / p             Permissions
-  3 / r             Pending requests
-  q                 Quit
+Login options:
+  --token <token>   Login token (prefer interactive input to avoid shell history)
+  --cloud <url>     Cloud origin (default: https://bdxa.buildifyx.com)
+
+Local development options:
+  --root <path>     Primary workspace root
+  --port <number>   Local MCP port (default: 3333)
+  --full-access     Permit arbitrary executable names
+  --no-tui          Disable the interactive TUI
 
 Examples:
-  bdxa
+  bdxa login
+  bdxa status
   bdxa --root ~/projects
-  bdxa r --root ~/projects
-  bdxa r --root ~/projects --full-access
-  bdxa r --no-tui
+  bdxa connect --root ~/projects
+  bdxa logout
+  bdxa local --root ~/projects --port 3333
   bdxa doctor
   bdxa update
   bdxa -v

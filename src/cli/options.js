@@ -28,9 +28,7 @@ export function parsePort(value = '3333') {
 
 export function parseInvocation(argv) {
   const first = argv[0];
-  const remoteFlags = new Set(['--root', '--port', '--full-access', '--no-tui']);
-  if (!first || remoteFlags.has(first)) {
-    return { command: 'remote', args: argv };
-  }
+  const cloudFlags = new Set(['--root', '--full-access', '--no-tui']);
+  if (!first || cloudFlags.has(first)) return { command: 'cloud', args: argv };
   return { command: first, args: argv.slice(1) };
 }

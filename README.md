@@ -1,20 +1,26 @@
 # Buildifyx Desktop Agent
 
-Buildifyx Desktop Agent (`bdxa`) lets ChatGPT work with files and approved developer commands on your computer through MCP.
+Buildifyx Desktop Agent (`bdxa`) connects a user-controlled computer to Buildifyx Cloud so ChatGPT can use approved MCP tools on that machine.
 
-The agent runs locally, shows every MCP action in a terminal UI, and lets you control what ChatGPT is allowed to read, write, or execute.
+Default cloud:
 
-> Current package: `@buildifyx/desktop-agent@0.1.0`
+```text
+https://bdxa.buildifyx.com
+```
 
-## Requirements
+Agent connection:
 
-- Node.js 20 or newer
-- npm
-- A terminal with interactive TTY support for the full-screen UI
+```text
+wss://bdxa.buildifyx.com/agent
+```
+
+Current package version:
+
+```text
+@buildifyx/desktop-agent@0.1.0
+```
 
 ## Install
-
-Install globally from npm:
 
 ```bash
 npm install -g @buildifyx/desktop-agent
@@ -24,260 +30,185 @@ Check the installation:
 
 ```bash
 bdxa --version
-```
-
-Run diagnostics:
-
-```bash
 bdxa doctor
 ```
 
-## Start the agent
+## 1. Login
 
-Run `bdxa` inside the project you want ChatGPT to access:
+Ask your Buildifyx administrator for a login token, then run:
 
 ```bash
-cd ~/projects/my-app
+bdxa login
+```
+
+Paste the token when prompted.
+
+For internal automation you can also use:
+
+```bash
+bdxa login --token "$BUILDFIYX_LOGIN_TOKEN"
+```
+
+Using `--token` directly may expose the token through shell history, so interactive login is preferred.
+
+A successful login registers this computer as a device and stores its device credential locally in:
+
+```text
+~/.buildifyx/credentials.json
+```
+
+On macOS and Linux the agent attempts to keep this file readable only by the current user.
+
+Login tokens are intended to be short-lived or one-time credentials. The device credential returned by Buildifyx Cloud is what `bdxa` uses for subsequent cloud connections.
+
+## 2. Check login status
+
+```bash
+bdxa status
+```
+
+The command shows the configured cloud, device ID, account when available, credential expiry, and whether Buildifyx Cloud currently accepts the device credential.
+
+## 3. Connect the device
+
+Run `bdxa` from the directory you want ChatGPT to work in:
+
+```bash
+cd ~/projects/my-project
 bdxa
 ```
 
-Or choose a workspace explicitly:
+Or choose the workspace explicitly:
 
 ```bash
-bdxa --root ~/projects/my-app
+bdxa --root ~/projects/my-project
 ```
 
-By default the MCP server listens on:
+`bdxa` now connects outward to Buildifyx Cloud. The computer does not need to expose a public port for normal cloud operation.
+
+Connection path:
 
 ```text
-http://127.0.0.1:3333/mcp
+ChatGPT
+   ↓
+Buildifyx Cloud
+   ↓
+Secure WebSocket
+   ↓
+bdxa
+   ↓
+Local permissions
+   ↓
+Your files and commands
 ```
 
-Health information is available at:
+The local agent remains the final permission authority. A cloud request still has to pass the permission policy running on the user's computer before a tool can execute.
 
-```text
-http://127.0.0.1:3333/health
+## Cloud protocol
+
+When the agent connects, it authenticates the WebSocket handshake using the device credential and sends a `device.ready` message containing the agent version, device information, and MCP tool manifest hash.
+
+The cloud can send a tool request such as:
+
+```json
+{
+  "type": "tool.call",
+  "requestId": "req_123",
+  "tool": "read_file",
+  "arguments": {
+    "path": "README.md"
+  }
+}
 ```
 
-The registered MCP tool manifest is available at:
+The agent routes it through the same local runtime and permission system used by local MCP mode.
 
-```text
-http://127.0.0.1:3333/tools
+Successful requests return:
+
+```json
+{
+  "type": "tool.result",
+  "requestId": "req_123",
+  "result": {}
+}
 ```
 
-Use another port if needed:
+Failed requests return:
 
-```bash
-bdxa --port 4444
+```json
+{
+  "type": "tool.error",
+  "requestId": "req_123",
+  "error": {
+    "code": "PERMISSION_DENIED",
+    "message": "Permission denied"
+  }
+}
 ```
 
-## Terminal UI
-
-When `bdxa` runs in an interactive terminal it opens a full-screen TUI.
-
-The dashboard shows:
-
-- MCP connection status
-- Registered tool count and schema fingerprint
-- Recent MCP activity
-- The currently selected request
-- Files and directories accessed by MCP file tools
-- Commands executed by `run_command`
-- Permission decisions
-- Pending approval requests
-- Current permission profile
-
-The UI automatically adapts to terminal size. Wide terminals use side-by-side panels; narrow terminals stack the panels vertically.
-
-### Main controls
-
-```text
-↑ / ↓      Select activity
-P          Permissions
-R          Allowed roots
-C          Custom command rules
-T          MCP tools
-L          Show audit log path
-? / H      Help
-Q          Back
-Ctrl+C     Exit Buildifyx Desktop Agent
-```
-
-`Q` is always used to go back or cancel. Use `Ctrl+C` to stop the agent.
+The agent also sends heartbeats and reconnects automatically with backoff when the cloud connection drops.
 
 ## Permissions
 
-Buildifyx Desktop Agent uses three permission states:
+The default Auto profile allows normal reads, writes, and approved developer commands while asking before dangerous operations or access outside allowed roots.
+
+Available profiles are:
 
 ```text
-ALLOW   Run without asking
-ASK     Ask in the TUI before continuing
-DENY    Reject the request
+Auto
+Read only
+Full access
+Custom
 ```
 
-The main permission categories are:
+Full access is powerful and is not an operating-system sandbox. Commands run with the permissions of the operating-system user running `bdxa`.
 
-- Read files
-- Write files
-- Normal commands
-- Dangerous commands
-- Access outside allowed roots
+### ASK requests
 
-Open the permission editor with:
-
-```text
-P
-```
-
-Controls:
-
-```text
-↑ / ↓      Select permission
-← / →      Change ALLOW / ASK / DENY
-A          Auto profile
-O          Read-only profile
-F          Full-access profile
-Q          Back
-```
-
-### Auto
-
-Recommended for normal development use.
-
-```text
-Read             ALLOW
-Write            ALLOW
-Commands         ALLOW
-Dangerous        ASK
-Outside root     ASK
-```
-
-### Read only
-
-Useful when you want ChatGPT to inspect a project without freely changing or executing it.
-
-```text
-Read             ALLOW
-Write            ASK
-Commands         ASK
-Dangerous        ASK
-Outside root     ASK
-```
-
-### Full access
-
-Allows all configured operations without confirmation.
-
-Full access is powerful and is **not an operating-system sandbox**. Commands run with the permissions of your current OS user.
-
-## Approval requests
-
-When a permission is set to `ASK`, the MCP request pauses and the TUI shows an approval panel before the action is executed.
-
-Example:
+When a rule resolves to `ASK`, the cloud request waits while the TUI displays an approval prompt:
 
 ```text
 APPROVAL REQUIRED
 
 docker ps
-Matched command rule: docker ps
 
-› Allow once
+> Allow once
   Always allow this request
   Deny
-
-↑↓ Select   Enter Confirm   Q Back/Deny
 ```
 
-Options:
+The tool executes only after local approval.
 
-- **Allow once** — allow only the current request
-- **Always allow this request** — save a matching permission rule
-- **Deny** — reject the request
+If the agent is running with `--no-tui`, an ASK request returns a confirmation-required error instead of waiting indefinitely.
 
-Pressing `Q` on an approval request denies the request and returns control to the dashboard.
+### Custom command rules
 
-## Custom command rules
+Command rules match executable name plus argument prefix.
 
-Restricted mode starts with a small set of developer commands. Other executables can be added from the TUI.
-
-Open custom command rules with:
+For example:
 
 ```text
-C
+docker       ALLOW
+docker ps    ASK
 ```
 
-Controls:
+The more specific rule wins, so `docker ps` asks even though the broader `docker` rule allows other Docker commands.
 
-```text
-↑ / ↓      Select rule
-← / →      Change ALLOW / ASK / DENY
-A          Add rule
-D          Delete rule
-Q          Back
-```
-
-A rule is an executable plus an optional argument prefix.
-
-Examples:
-
-```text
-docker        ASK
-docker ps     ALLOW
-rm -rf        ASK
-```
-
-More specific rules take priority over broader rules. For example:
-
-```text
-docker        ALLOW
-docker ps     ASK
-```
-
-`docker ps` will still ask for approval.
-
-Commands are executed without a shell string. Buildifyx Desktop Agent passes the executable and arguments separately.
+Commands are executed without a shell.
 
 ## Allowed roots
 
-The directory passed through `--root` is the primary workspace.
+The primary root is the directory supplied through `--root`, or the current working directory when omitted.
 
-Open the roots editor with:
+Additional roots can be managed from the TUI.
 
-```text
-R
-```
+Requests outside configured roots follow the `outsideRoot` permission setting and may be allowed, denied, or require approval.
 
-You can add other directories that ChatGPT may access.
-
-Controls:
-
-```text
-↑ / ↓      Select root
-A          Add root
-D          Delete additional root
-Q          Back
-```
-
-The primary root cannot be deleted from the TUI.
-
-Access outside the configured roots follows the `Outside root` permission setting:
-
-- `ALLOW` — allow access
-- `ASK` — request approval first
-- `DENY` — reject access
-
-Access to `.git` internals remains blocked by the agent's path protection.
+`.git` internals remain protected by the local path security layer.
 
 ## MCP tools
 
-Open the MCP tools screen with:
-
-```text
-T
-```
-
-Current tools:
+The current agent exposes:
 
 ```text
 get_system_info
@@ -288,187 +219,119 @@ edit_file
 run_command
 ```
 
-The tools screen shows:
+The agent sends its tool count and schema hash to Buildifyx Cloud when connecting so the cloud can detect which tool definition set the device is running.
 
-- Registered tool count
-- Tool names
-- Permission category for each tool
-- Current schema fingerprint
-- Whether the tool manifest changed since the previous agent run
+## TUI controls
 
-If the TUI shows:
+Main screen:
 
 ```text
-TOOLS CHANGED
+↑↓       Select activity
+P        Permissions
+R        Allowed roots
+C        Command rules
+T        MCP tools
+L        Audit log information
+? / H    Help
+Q        Back
+Ctrl+C   Quit
 ```
 
-then the local agent has a different MCP tool definition than the previous run. If ChatGPT still shows an older set of functions, refresh or reconnect the MCP integration so ChatGPT performs tool discovery again.
-
-You can also inspect the current manifest directly:
+Approval screen:
 
 ```text
-http://127.0.0.1:3333/tools
+↑↓       Select decision
+Enter    Confirm
+Q        Deny / Back
+Ctrl+C   Quit
 ```
-
-## File access
-
-File tools work with UTF-8 text files up to 1 MiB.
-
-The dashboard records explicit file activity such as:
-
-```text
-READ
-WRITE
-CREATE
-LIST
-```
-
-For `run_command`, the agent displays the executable, arguments, and working directory. It does not claim to trace every file opened internally by a child process.
 
 ## Audit log
 
-MCP activity and permission decisions are written to:
+Local activity is recorded at:
 
 ```text
 ~/.buildifyx/audit.log
 ```
 
-Press `L` in the dashboard to display the active audit log path.
+The audit log records tool names, permission decisions, paths, commands, status, and timing information. Write/edit payload contents are redacted rather than intentionally duplicated into the audit log.
 
-The audit log records metadata such as tool names, paths, commands, permission decisions, and durations. Full file contents sent to write/edit operations are not intentionally copied into the audit log.
-
-Permission settings are stored at:
-
-```text
-~/.buildifyx/policy.json
-```
-
-The last MCP tool manifest is stored at:
-
-```text
-~/.buildifyx/tool-manifest.json
-```
-
-## Non-interactive mode
-
-Disable the TUI explicitly with:
+## Logout
 
 ```bash
-bdxa --no-tui
+bdxa logout
 ```
 
-Non-interactive environments also fall back to this mode automatically.
+The agent asks Buildifyx Cloud to revoke the device credential and then removes the local credential file.
 
-When a permission is set to `ASK` but no interactive TUI is available, the request returns a confirmation-required error instead of waiting indefinitely.
+If the cloud cannot be reached, `bdxa` still removes the local credential and reports that remote revocation failed.
 
-## Startup options
-
-```text
---root <path>       Primary workspace directory
---port <number>     MCP port (default: 3333)
---full-access       Permit arbitrary executable names
---no-tui            Disable the interactive terminal UI
-```
-
-Examples:
-
-```bash
-bdxa
-bdxa --root ~/projects/my-app
-bdxa --root ~/projects/my-app --port 4444
-bdxa --full-access
-bdxa --no-tui
-```
-
-## Other commands
-
-Show the installed version:
-
-```bash
-bdxa --version
-```
-
-Check the environment and package version:
-
-```bash
-bdxa doctor
-```
-
-Update to the latest published npm version:
+## Update
 
 ```bash
 bdxa update
 ```
 
-Show CLI help:
+Then restart the agent:
 
 ```bash
-bdxa --help
+bdxa
 ```
 
-## Connecting ChatGPT
+## Useful commands
 
-Buildifyx Desktop Agent exposes an MCP endpoint locally at `/mcp`.
+```bash
+bdxa login
+bdxa status
+bdxa --root ~/projects
+bdxa connect --root ~/projects
+bdxa logout
+bdxa doctor
+bdxa update
+bdxa --version
+```
 
-If ChatGPT is connecting from outside your machine, the MCP endpoint must be reachable through the secure tunnel or remote connection method you are using. Do not expose the local MCP port directly to the public internet without appropriate access controls.
+## Local MCP compatibility mode
 
-After changing or updating MCP tools, reconnect or refresh the MCP integration if ChatGPT still displays an older tool list.
+For local development or debugging, the previous localhost MCP server remains available explicitly:
+
+```bash
+bdxa local --root ~/projects --port 3333
+```
+
+Normal users should use cloud mode by running `bdxa` without the `local` command.
 
 ## Troubleshooting
 
-### ChatGPT does not see a new function
+### `Not logged in`
 
-1. Press `T` in `bdxa` and confirm the function appears in **MCP TOOLS**.
-2. Check whether the TUI shows `TOOLS CHANGED`.
-3. Open `/tools` and confirm the tool is present in the current manifest.
-4. Restart `bdxa` if the running process was started before the update.
-5. Refresh or reconnect the MCP integration in ChatGPT.
+Run:
 
-If the function appears in `bdxa` but not in ChatGPT, the local agent is serving the new tool set and ChatGPT likely needs to perform tool discovery again.
-
-### A command is blocked
-
-Open `C` and check the matching custom command rule, or open `P` and review command permissions.
-
-Example:
-
-```text
-docker ps → ASK
+```bash
+bdxa login
 ```
 
-The next matching request should pause and display an approval panel.
+### `Device credential has expired`
 
-### `ASK` does not show a prompt
+Request a new login token from your administrator and run `bdxa login` again.
 
-Make sure:
+### ASK does not execute immediately
 
-- `bdxa` is running with the interactive TUI
-- the command or permission rule is actually set to `ASK`
-- you restarted `bdxa` after installing a newer agent version
-- a broader command rule is not overriding your expectation; the agent gives priority to the most specific matching rule
+This is expected. The request is waiting for a local approval in the TUI.
 
-### The UI is too small
+### Cloud is temporarily unavailable
 
-Resize the terminal. The layout responds automatically and switches to stacked panels on narrow terminals.
+Leave `bdxa` running. The cloud client automatically retries with exponential backoff.
 
-### Exit the agent
+### Need to inspect the current tools
 
-Use:
-
-```text
-Ctrl+C
-```
-
-`Q` is reserved for Back/Cancel inside the UI.
+Press `T` in the TUI to see the current tool count and schema hash.
 
 ## Security notes
 
-Buildifyx Desktop Agent can read and modify files and execute approved commands as your current operating-system user.
-
-Before enabling Full access or approving a destructive command, verify the requested command, arguments, path, and working directory shown in the TUI.
-
-Command execution is not an OS sandbox.
-
----
-
-Buildifyx Desktop Agent is currently in early development. Review permissions carefully when using it on important projects.
+- Buildifyx Cloud does not replace the local permission system.
+- Device authentication uses a dedicated device credential, separate from the login token.
+- Command execution uses direct executable invocation rather than shell command strings.
+- File access is constrained by configured roots and path checks.
+- Full access is not an OS sandbox.
+- Keep `~/.buildifyx/credentials.json` private.

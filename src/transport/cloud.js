@@ -1,0 +1,202 @@
+import WebSocket from 'ws';
+import { normalizeError } from '../core/errors.js';
+
+export const DEFAULT_CLOUD_ORIGIN = 'https://bdxa.buildifyx.com';
+
+export function normalizeCloudOrigin(value = DEFAULT_CLOUD_ORIGIN) {
+  const url = new URL(value);
+  if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Cloud URL must use http or https.');
+  url.pathname = url.pathname.replace(/\/+$/, '');
+  url.search = '';
+  url.hash = '';
+  return url.toString().replace(/\/$/, '');
+}
+
+export function getCloudEndpoints(origin = DEFAULT_CLOUD_ORIGIN) {
+  const normalized = normalizeCloudOrigin(origin);
+  const http = new URL(normalized);
+  const ws = new URL(normalized);
+  ws.protocol = http.protocol === 'https:' ? 'wss:' : 'ws:';
+  return {
+    origin: normalized,
+    loginUrl: new URL('/api/auth/device-login', http).toString(),
+    meUrl: new URL('/api/device/me', http).toString(),
+    logoutUrl: new URL('/api/device/logout', http).toString(),
+    agentUrl: new URL('/agent', ws).toString()
+  };
+}
+
+async function parseJsonResponse(response) {
+  const text = await response.text();
+  let body = null;
+  if (text) {
+    try { body = JSON.parse(text); } catch { body = { message: text }; }
+  }
+  if (!response.ok) {
+    const message = body?.error?.message ?? body?.message ?? `Cloud request failed (${response.status})`;
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
+  return body;
+}
+
+export async function loginDevice({ cloudUrl = DEFAULT_CLOUD_ORIGIN, token, device, signal }) {
+  const { loginUrl } = getCloudEndpoints(cloudUrl);
+  const response = await fetch(loginUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ token, device }),
+    signal
+  });
+  return parseJsonResponse(response);
+}
+
+export async function getDeviceMe({ cloudUrl = DEFAULT_CLOUD_ORIGIN, deviceToken, signal }) {
+  const { meUrl } = getCloudEndpoints(cloudUrl);
+  const response = await fetch(meUrl, {
+    headers: { authorization: `Bearer ${deviceToken}`, accept: 'application/json' },
+    signal
+  });
+  return parseJsonResponse(response);
+}
+
+export async function logoutDevice({ cloudUrl = DEFAULT_CLOUD_ORIGIN, deviceToken, signal }) {
+  const { logoutUrl } = getCloudEndpoints(cloudUrl);
+  const response = await fetch(logoutUrl, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${deviceToken}`, accept: 'application/json' },
+    signal
+  });
+  if (response.status === 204) return null;
+  return parseJsonResponse(response);
+}
+
+function safeSend(socket, payload) {
+  if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+}
+
+export function createCloudAgent({
+  cloudUrl = DEFAULT_CLOUD_ORIGIN,
+  credentials,
+  runtime,
+  manifest,
+  version,
+  deviceInfo,
+  eventBus,
+  heartbeatMs = 30_000,
+  reconnect = true
+}) {
+  const endpoint = getCloudEndpoints(cloudUrl).agentUrl;
+  let socket = null;
+  let stopped = false;
+  let heartbeat = null;
+  let retryTimer = null;
+  let retryAttempt = 0;
+  const listeners = new Set();
+  let state = { status: 'disconnected', endpoint, retryAttempt: 0, lastError: null };
+
+  function setState(patch) {
+    state = { ...state, ...patch };
+    eventBus?.emit('cloud.connection', state);
+    for (const listener of listeners) listener({ ...state });
+  }
+
+  function scheduleReconnect() {
+    if (stopped || !reconnect || retryTimer) return;
+    const delays = [1000, 2000, 5000, 10_000, 30_000];
+    const delay = delays[Math.min(retryAttempt, delays.length - 1)];
+    retryAttempt += 1;
+    setState({ status: 'reconnecting', retryAttempt, retryInMs: delay });
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      connect();
+    }, delay);
+    retryTimer.unref?.();
+  }
+
+  async function handleMessage(raw) {
+    let message;
+    try { message = JSON.parse(raw.toString()); } catch { return; }
+    if (message.type === 'ping') {
+      safeSend(socket, { type: 'pong', timestamp: new Date().toISOString() });
+      return;
+    }
+    if (message.type !== 'tool.call' || !message.requestId || !message.tool) return;
+
+    eventBus?.emit('cloud.tool.received', { requestId: message.requestId, tool: message.tool });
+    try {
+      const result = await runtime.dispatch(message.tool, message.arguments ?? {});
+      safeSend(socket, { type: 'tool.result', requestId: message.requestId, result });
+    } catch (error) {
+      const normalized = normalizeError(error);
+      safeSend(socket, {
+        type: 'tool.error',
+        requestId: message.requestId,
+        error: { code: normalized.code, message: normalized.message, details: normalized.details }
+      });
+    }
+  }
+
+  function connect() {
+    if (stopped) return;
+    if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
+    setState({ status: 'connecting', endpoint, lastError: null });
+    socket = new WebSocket(endpoint, {
+      headers: {
+        authorization: `Bearer ${credentials.deviceToken}`,
+        'user-agent': `buildifyx-desktop-agent/${version}`
+      }
+    });
+
+    socket.on('open', () => {
+      retryAttempt = 0;
+      setState({ status: 'connected', retryAttempt: 0, retryInMs: null, connectedAt: new Date().toISOString() });
+      safeSend(socket, {
+        type: 'device.ready',
+        deviceId: credentials.deviceId,
+        agentVersion: version,
+        device: deviceInfo,
+        tools: { count: manifest.count, hash: manifest.hash, manifestVersion: manifest.manifestVersion }
+      });
+      clearInterval(heartbeat);
+      heartbeat = setInterval(() => safeSend(socket, { type: 'device.heartbeat', timestamp: new Date().toISOString() }), heartbeatMs);
+      heartbeat.unref?.();
+    });
+
+    socket.on('message', (raw) => { void handleMessage(raw); });
+    socket.on('error', (error) => setState({ lastError: error.message }));
+    socket.on('close', (code, reason) => {
+      clearInterval(heartbeat);
+      heartbeat = null;
+      socket = null;
+      setState({ status: 'disconnected', closeCode: code, closeReason: reason.toString() || null });
+      scheduleReconnect();
+    });
+  }
+
+  async function stop() {
+    stopped = true;
+    clearInterval(heartbeat);
+    clearTimeout(retryTimer);
+    heartbeat = null;
+    retryTimer = null;
+    if (!socket) return;
+    await new Promise((resolve) => {
+      const active = socket;
+      const timeout = setTimeout(resolve, 1000);
+      active.once('close', () => { clearTimeout(timeout); resolve(); });
+      active.close(1000, 'agent shutdown');
+    });
+    socket = null;
+    setState({ status: 'stopped' });
+  }
+
+  return {
+    endpoint,
+    connect,
+    stop,
+    getState: () => ({ ...state }),
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }
+  };
+}

@@ -1,7 +1,7 @@
 {
   "name": "@buildifyx/desktop-agent",
   "version": "0.1.0",
-  "description": "Private local MCP agent for connecting a developer machine to ChatGPT through Secure MCP Tunnel.",
+  "description": "Buildifyx cloud-connected desktop agent for securely running MCP tools on a user-controlled machine.",
   "type": "module",
   "bin": {
     "bdxa": "./src/cli.js",
@@ -25,6 +25,7 @@
     "@modelcontextprotocol/server": "2.0.0",
     "ink": "^6.8.0",
     "react": "^19.2.8",
+    "ws": "^8.21.3",
     "zod": "4.5.4"
   },
   "license": "MIT"
