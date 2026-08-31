@@ -157,10 +157,14 @@ export function createCloudAgent({
         deviceId: credentials.deviceId,
         agentVersion: version,
         device: deviceInfo,
-        tools: { count: manifest.count, hash: manifest.hash, manifestVersion: manifest.manifestVersion }
+        toolManifest: { count: manifest.count, hash: manifest.hash, manifestVersion: manifest.manifestVersion }
       });
       clearInterval(heartbeat);
-      heartbeat = setInterval(() => safeSend(socket, { type: 'device.heartbeat', timestamp: new Date().toISOString() }), heartbeatMs);
+      heartbeat = setInterval(() => safeSend(socket, {
+        type: 'device.heartbeat',
+        deviceId: credentials.deviceId,
+        timestamp: new Date().toISOString()
+      }), heartbeatMs);
       heartbeat.unref?.();
     });
 
