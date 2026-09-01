@@ -7,6 +7,13 @@ import { useTuiLayout } from './layout.js';
 const h = React.createElement;
 const ACTIONS = ['allow', 'ask', 'deny'];
 const CATEGORIES = ['read', 'write', 'command', 'dangerous', 'outsideRoot'];
+const CATEGORY_LABELS = Object.freeze({
+  read: 'Read files',
+  write: 'Write files',
+  command: 'Run commands',
+  dangerous: 'Dangerous commands',
+  outsideRoot: 'Outside workspace'
+});
 
 function cycleAction(current, direction) {
   const index = ACTIONS.indexOf(current);
@@ -17,31 +24,39 @@ function title(text) {
   return h(Text, { bold: true }, text);
 }
 
-function Header({ version, root, mode, profile, pendingCount, layout, toolManifest, toolsChanged }) {
-  const toolLabel = toolManifest ? `Tools ${toolManifest.count} · ${toolManifest.shortHash}` : 'Tools ?';
-  const toolState = toolsChanged ? ' · TOOLS CHANGED' : '';
+function approvalChoices(request) {
+  const choices = [{ label: 'Allow once', action: 'allow', remember: null }];
 
-  if (layout.narrow) {
-    return h(Box, { flexDirection: 'column', marginBottom: 1 },
-      h(Box, { justifyContent: 'space-between' },
-        h(Text, { bold: true }, `BuildifyX Desktop Agent v${version}`),
-        h(Text, { bold: true }, pendingCount ? `● WAITING ${pendingCount}` : '● ONLINE')
-      ),
-      h(Text, { wrap: 'truncate-end' }, `Root ${root}`),
-      h(Text, null, `${mode} · ${PROFILES[profile].label} · ${toolLabel}${toolState}`)
-    );
+  if (request.toolName === 'run_command') {
+    choices.push({ label: 'Always allow this command', action: 'allow', remember: 'command' });
+  } else if (request.pathInfo?.scope === 'outside') {
+    choices.push({ label: 'Always allow this location', action: 'allow', remember: 'root' });
   }
+
+  choices.push({ label: 'Deny', action: 'deny', remember: null });
+  return choices;
+}
+
+function approvalImpact(request) {
+  if (request.category === 'dangerous') return 'This action is classified as dangerous and may make significant changes.';
+  if (request.pathInfo?.scope === 'outside') return 'This action needs access outside the current workspace.';
+  if (request.category === 'write') return 'This action can modify files.';
+  if (request.category === 'command') return 'This action will run a command on this computer.';
+  return request.evaluation?.reason ?? request.category;
+}
+
+function Header({ version, root, mode, profile, pendingCount, layout }) {
+  const connection = pendingCount ? `● APPROVAL ${pendingCount}` : '● CONNECTED';
+  const access = `${PROFILES[profile].label} · ${mode}`;
 
   return h(Box, { flexDirection: 'column', marginBottom: 1 },
     h(Box, { justifyContent: 'space-between' },
-      h(Text, { bold: true }, `BuildifyX Desktop Agent  v${version}`),
-      h(Text, { bold: true }, pendingCount ? `MCP ● WAITING (${pendingCount})` : 'MCP ● ONLINE')
+      h(Text, { bold: true }, `Buildifyx Desktop Agent${layout.narrow ? '' : `  v${version}`}`),
+      h(Text, { bold: true }, connection)
     ),
-    h(Box, { justifyContent: 'space-between' },
-      h(Text, { wrap: 'truncate-end' }, `Root ${root}`),
-      h(Text, null, `Mode ${mode}   Permissions ${PROFILES[profile].label}`)
-    ),
-    h(Text, { color: toolsChanged ? 'yellow' : undefined }, `${toolLabel}${toolState}`)
+    layout.narrow ? h(Text, { dimColor: true }, `v${version}`) : null,
+    h(Text, { wrap: 'truncate-end' }, `Workspace  ${root}`),
+    h(Text, null, `Access     ${access}`)
   );
 }
 
@@ -52,9 +67,9 @@ function ActivityPanel({ activities, selected, layout }) {
   const visible = activities.slice(start, start + windowSize);
 
   return h(Box, { width: layout.activityWidth, borderStyle: 'classic', paddingX: 1, flexDirection: 'column', height: layout.panelHeight },
-    title(`ACTIVITY  ${activities.length}`),
+    title('RECENT ACTIVITY'),
     visible.length === 0
-      ? h(Text, { dimColor: true }, 'Waiting for MCP tool calls...')
+      ? h(Text, { dimColor: true }, 'Waiting for requests from ChatGPT...')
       : visible.map((item, localIndex) => {
           const actualIndex = start + localIndex;
           const active = actualIndex === selected;
@@ -72,7 +87,7 @@ function ActivityPanel({ activities, selected, layout }) {
 }
 
 function RequestDetails({ item, compact }) {
-  if (!item) return h(Text, { dimColor: true }, 'No request selected.');
+  if (!item) return h(Text, { dimColor: true }, 'No request selected yet.');
   const resourceLimit = compact ? 3 : 7;
   const resources = item.resources.slice(-resourceLimit);
 
@@ -92,17 +107,18 @@ function RequestDetails({ item, compact }) {
 }
 
 function ApprovalPanel({ request, selected }) {
-  const choices = ['Allow once', 'Always allow this request', 'Deny'];
+  const choices = approvalChoices(request);
+
   return h(Box, { flexDirection: 'column' },
     h(Text, { bold: true }, 'APPROVAL REQUIRED'),
     h(Text, null, ''),
-    h(Text, { wrap: 'wrap' }, request.description),
-    request.pathInfo ? h(Text, { wrap: 'truncate-end' }, `Path: ${request.pathInfo.resolved}`) : null,
-    h(Text, { dimColor: true, wrap: 'wrap' }, request.evaluation?.reason ?? request.category),
+    h(Text, { bold: true, wrap: 'wrap' }, request.description),
+    request.pathInfo ? h(Text, { wrap: 'truncate-end' }, `Location  ${request.pathInfo.resolved}`) : null,
+    h(Text, { dimColor: true, wrap: 'wrap' }, approvalImpact(request)),
     h(Text, null, ''),
-    ...choices.map((choice, index) => h(Text, { key: choice, bold: selected === index }, `${selected === index ? '›' : ' '} ${choice}`)),
+    ...choices.map((choice, index) => h(Text, { key: choice.label, bold: selected === index }, `${selected === index ? '›' : ' '} ${choice.label}`)),
     h(Text, null, ''),
-    h(Text, { dimColor: true }, '↑↓ Select   Enter Confirm   Q Back/Deny')
+    h(Text, { dimColor: true }, '↑↓ Select   Enter Confirm   Q Back/Deny   Ctrl+C Quit')
   );
 }
 
@@ -110,45 +126,23 @@ function StatusPanel({ selectedItem, request, approvalSelected, layout }) {
   return h(Box, { width: layout.statusWidth, borderStyle: 'classic', paddingX: 1, flexDirection: 'column', height: layout.panelHeight },
     request
       ? h(ApprovalPanel, { request, selected: approvalSelected })
-      : h(React.Fragment, null, title('STATUS'), h(RequestDetails, { item: selectedItem, compact: layout.compact }))
-  );
-}
-
-function PermissionsSummary({ policy, profile, compact, toolManifest, toolsChanged }) {
-  const category = policy.categories;
-  const toolText = toolManifest ? `Tools ${toolManifest.count} · ${toolManifest.shortHash}${toolsChanged ? ' · CHANGED' : ''}` : 'Tools unavailable';
-  const lines = compact
-    ? [
-        `Profile ${PROFILES[profile].label} · Read ${String(category.read).toUpperCase()} · Write ${String(category.write).toUpperCase()} · Outside ${String(category.outsideRoot).toUpperCase()}`,
-        `Command ${String(category.command).toUpperCase()} · Dangerous ${String(category.dangerous).toUpperCase()} · ${toolText}`
-      ]
-    : [
-        `Profile ${PROFILES[profile].label}`,
-        `Files  Read ${String(category.read).toUpperCase()}  Write ${String(category.write).toUpperCase()}  Outside ${String(category.outsideRoot).toUpperCase()}`,
-        `Commands  Normal ${String(category.command).toUpperCase()}  Dangerous ${String(category.dangerous).toUpperCase()}  Custom ${policy.commandRules.length}`,
-        `Roots  primary + ${policy.additionalRoots.length} additional   ${toolText}`
-      ];
-
-  return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column' },
-    title('PERMISSIONS / MCP'),
-    ...lines.map((line) => h(Text, { key: line, wrap: 'truncate-end', color: toolsChanged && line.includes('Tools') ? 'yellow' : undefined }, line))
+      : h(React.Fragment, null, title('DETAILS'), h(RequestDetails, { item: selectedItem, compact: layout.compact }))
   );
 }
 
 function Controls({ screen, inputMode, compact }) {
   let lines;
-  if (inputMode) lines = ['Enter: Save   Q on empty input: Back'];
-  else if (screen === 'permissions') lines = ['↑↓ Select   ←→ Change   A Auto   O Read-only   F Full   Q Back'];
-  else if (screen === 'roots') lines = ['↑↓ Select   A Add root   D Delete root   Q Back'];
-  else if (screen === 'commands') lines = ['↑↓ Select   ←→ Change   A Add rule   D Delete rule   Q Back'];
-  else if (screen === 'tools') lines = ['Q: Back   Ctrl+C: Quit'];
-  else if (screen === 'help') lines = ['Q: Back   Ctrl+C: Quit'];
+  if (inputMode) lines = ['Enter Save   Q on empty input Back   Ctrl+C Quit'];
+  else if (screen === 'permissions') lines = ['↑↓ Select   ←→ Change   A Auto   O Read-only   F Allow-all', 'R Roots   C Command rules   Q Back   Ctrl+C Quit'];
+  else if (screen === 'roots') lines = ['↑↓ Select   A Add root   D Delete root   Q Back   Ctrl+C Quit'];
+  else if (screen === 'commands') lines = ['↑↓ Select   ←→ Change   A Add rule   D Delete rule   Q Back   Ctrl+C Quit'];
+  else if (screen === 'tools') lines = ['Q Back   Ctrl+C Quit'];
+  else if (screen === 'help') lines = ['Q Back   Ctrl+C Quit'];
   else lines = compact
-    ? ['↑↓ Activity  P Permissions  R Roots  C Commands  T Tools  ?: Help  Ctrl+C Quit']
-    : ['↑↓ Activity   P: Permissions   R: Roots   C: Commands   T: MCP Tools', 'L: Audit info   ?: Help   Q: Back   Ctrl+C: Quit'];
+    ? ['↑↓ Activity   P Permissions   ? Help   Ctrl+C Quit']
+    : ['↑↓ Activity   P Permissions   ? Help   Q Back   Ctrl+C Quit', 'R Allowed roots   C Command rules   T Diagnostics'];
 
   return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column' },
-    title('CONTROLS'),
     ...lines.map((line) => h(Text, { key: line, wrap: 'truncate-end' }, line))
   );
 }
@@ -156,15 +150,16 @@ function Controls({ screen, inputMode, compact }) {
 function PermissionsScreen({ policy, selected }) {
   return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column', flexGrow: 1 },
     title('PERMISSIONS'),
-    h(Text, { dimColor: true }, 'Change how ChatGPT can operate this machine.'),
+    h(Text, { dimColor: true }, 'Choose what ChatGPT can do automatically. ASK requires local approval.'),
     h(Text, null, ''),
     ...CATEGORIES.map((category, index) => h(Box, { key: category },
-      h(Text, { bold: index === selected }, `${index === selected ? '›' : ' '} ${category.padEnd(16)}`),
+      h(Text, { bold: index === selected }, `${index === selected ? '›' : ' '} ${CATEGORY_LABELS[category].padEnd(20)}`),
       h(Text, { bold: index === selected }, `[ ${String(policy.categories[category]).toUpperCase().padEnd(5)} ]`)
     )),
     h(Text, null, ''),
-    h(Text, null, `Additional roots: ${policy.additionalRoots.length}`),
-    h(Text, null, `Custom command rules: ${policy.commandRules.length}`)
+    h(Text, { dimColor: true }, `Current profile: ${PROFILES[detectProfile(policy)].label}`),
+    h(Text, { dimColor: true }, 'Presets: A Auto · O Read-only · F Allow all'),
+    h(Text, { dimColor: true }, `Additional roots: ${policy.additionalRoots.length} · Custom command rules: ${policy.commandRules.length}`)
   );
 }
 
@@ -172,17 +167,17 @@ function RootsScreen({ root, roots, selected, inputMode, buffer }) {
   const all = [root, ...roots];
   return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column', flexGrow: 1 },
     title('ALLOWED ROOTS'),
-    h(Text, { dimColor: true }, 'ChatGPT file tools may access these locations.'),
+    h(Text, { dimColor: true }, 'File tools may access these locations. The current workspace is always primary.'),
     h(Text, null, ''),
-    ...all.map((value, index) => h(Text, { key: `${value}-${index}`, bold: index === selected, wrap: 'truncate-end' }, `${index === selected ? '›' : ' '} ${index === 0 ? '[PRIMARY] ' : ''}${value}`)),
+    ...all.map((value, index) => h(Text, { key: `${value}-${index}`, bold: index === selected, wrap: 'truncate-end' }, `${index === selected ? '›' : ' '} ${index === 0 ? '[WORKSPACE] ' : ''}${value}`)),
     inputMode === 'root' ? h(Text, null, `\nNew root: ${buffer}█`) : null
   );
 }
 
 function CommandsScreen({ rules, selected, inputMode, buffer }) {
   return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column', flexGrow: 1 },
-    title('CUSTOM COMMAND RULES'),
-    h(Text, { dimColor: true }, 'Rules match executable + argument prefix. No shell strings.'),
+    title('COMMAND RULES'),
+    h(Text, { dimColor: true }, 'Rules match an executable plus argument prefix. Commands do not run through a shell.'),
     h(Text, null, ''),
     rules.length === 0 ? h(Text, { dimColor: true }, 'No custom command rules.') : null,
     ...rules.map((rule, index) => h(Text, { key: `${rule.executable}-${index}`, bold: index === selected, wrap: 'truncate-end' },
@@ -192,42 +187,46 @@ function CommandsScreen({ rules, selected, inputMode, buffer }) {
   );
 }
 
-function ToolsScreen({ manifest, manifestState, toolsUrl }) {
+function ToolsScreen({ manifest, manifestState, toolsUrl, auditPath }) {
   return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column', flexGrow: 1 },
-    title('MCP TOOLS'),
+    title('DIAGNOSTICS'),
     manifestState?.changed
-      ? h(Text, { color: 'yellow', bold: true }, 'Tool definitions changed since the previous bdxa run. ChatGPT may need to refresh tool discovery.')
-      : h(Text, { color: 'green' }, 'Tool definitions match the previous bdxa run.'),
+      ? h(Text, { color: 'yellow', bold: true }, 'MCP tool definitions changed since the previous run. ChatGPT may need to refresh tool discovery.')
+      : h(Text, { dimColor: true }, 'MCP tool definitions match the previous run.'),
     h(Text, null, ''),
-    h(Text, null, `Registered:   ${manifest?.count ?? 0}`),
-    h(Text, null, `Schema hash:  ${manifest?.hash ?? 'unknown'}`),
-    manifestState?.previousHash ? h(Text, { dimColor: true }, `Previous:     ${manifestState.previousHash}`) : null,
-    h(Text, { wrap: 'truncate-end' }, `Manifest URL: ${toolsUrl ?? 'unavailable'}`),
+    h(Text, { wrap: 'truncate-end' }, `Audit log     ${auditPath ?? '~/.buildifyx/audit.log'}`),
+    h(Text, { wrap: 'truncate-end' }, `Tools source  ${toolsUrl ?? 'unavailable'}`),
+    h(Text, null, `Tools         ${manifest?.count ?? 0}`),
+    h(Text, { dimColor: true }, `Schema hash   ${manifest?.hash ?? 'unknown'}`),
+    manifestState?.previousHash ? h(Text, { dimColor: true }, `Previous      ${manifestState.previousHash}`) : null,
     h(Text, null, ''),
     ...(manifest?.tools ?? []).map((tool) => h(Box, { key: tool.name, flexDirection: 'column', marginBottom: 1 },
       h(Text, { bold: true }, `✓ ${tool.name}`),
       h(Text, { dimColor: true }, `  ${tool.permission ?? 'unknown'} · ${tool.title}`)
-    )),
-    h(Text, { dimColor: true }, 'This shows what bdxa currently serves. It cannot directly inspect ChatGPT\'s cached tool snapshot.')
+    ))
   );
 }
 
 function HelpScreen() {
   return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column', flexGrow: 1 },
     title('HELP'),
-    h(Text, null, '  ↑↓       Select MCP activity'),
-    h(Text, null, '  P        Edit permissions'),
-    h(Text, null, '  R        Manage allowed roots'),
-    h(Text, null, '  C        Manage custom command rules'),
-    h(Text, null, '  T        Inspect MCP tools and schema hash'),
-    h(Text, null, '  L        Show audit log path'),
+    h(Text, { bold: true }, 'Main'),
+    h(Text, null, '  ↑↓       Select recent activity'),
+    h(Text, null, '  P        Permissions'),
+    h(Text, null, '  ? / H    Help'),
     h(Text, null, '  Q        Back'),
     h(Text, null, '  Ctrl+C   Quit'),
     h(Text, null, ''),
-    h(Text, null, 'APPROVALS'),
+    h(Text, { bold: true }, 'Advanced'),
+    h(Text, null, '  R        Allowed roots'),
+    h(Text, null, '  C        Command rules'),
+    h(Text, null, '  T        Diagnostics and MCP tools'),
+    h(Text, null, ''),
+    h(Text, { bold: true }, 'Approvals'),
     h(Text, null, '  ↑↓       Select decision'),
     h(Text, null, '  Enter    Confirm'),
-    h(Text, null, '  Q        Back / deny request')
+    h(Text, null, '  Q        Back / deny request'),
+    h(Text, null, '  Ctrl+C   Quit')
   );
 }
 
@@ -252,8 +251,8 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
   const [inputMode, setInputMode] = useState(null);
   const [buffer, setBuffer] = useState('');
   const initialMessage = toolManifestState?.changed
-    ? `TOOLS CHANGED: ${toolManifest?.count ?? '?'} registered (${toolManifest?.shortHash ?? 'unknown'}). Press T to inspect; ChatGPT may need refresh.`
-    : 'Waiting for MCP requests...';
+    ? 'MCP tools changed since the previous run. Press T for diagnostics.'
+    : 'Connected. Waiting for requests from ChatGPT...';
   const [message, setMessage] = useState(initialMessage);
 
   useEffect(() => eventBus.subscribe(() => setEvents(eventBus.getHistory())), [eventBus]);
@@ -279,21 +278,25 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
     if (key.ctrl && input.toLowerCase() === 'c') { await quit(); return; }
 
     if (request) {
+      const choices = approvalChoices(request);
       if (input === 'q' || input === 'Q') {
         approvalQueue.resolve(request.id, { action: 'deny', remember: null });
-        setMessage('Permission request denied.');
-      } else if (key.upArrow) setApprovalSelected((value) => Math.max(0, value - 1));
-      else if (key.downArrow) setApprovalSelected((value) => Math.min(2, value + 1));
-      else if (key.return) {
-        if (approvalSelected === 0) approvalQueue.resolve(request.id, { action: 'allow', remember: null });
-        else if (approvalSelected === 1) approvalQueue.resolve(request.id, { action: 'allow', remember: request.toolName === 'run_command' ? 'command' : request.pathInfo?.scope === 'outside' ? 'root' : null });
-        else approvalQueue.resolve(request.id, { action: 'deny', remember: null });
+        setMessage('Request denied.');
+      } else if (key.upArrow) {
+        setApprovalSelected((value) => Math.max(0, value - 1));
+        setApprovalSelected((value) => Math.max(0, value - 1));
+      } else if (key.downArrow) {
+        setApprovalSelected((value) => Math.min(choices.length - 1, value + 1));
+      } else if (key.return) {
+        const choice = choices[Math.min(approvalSelected, choices.length - 1)];
+        approvalQueue.resolve(request.id, { action: choice.action, remember: choice.remember });
+        setMessage(choice.action === 'deny' ? 'Request denied.' : choice.remember ? `${choice.label}.` : 'Request allowed once.');
       }
       return;
     }
 
     if (inputMode) {
-      if ((input === 'q' || input === 'Q') && buffer.length === 0) { setInputMode(null); setBuffer(''); return; }
+      if ((input === 'q' || input === 'Q') && buffer.length === 0) { setInputMode(null); setBuffer(''); setMessage('Edit cancelled.'); return; }
       if (key.return) {
         const value = buffer.trim();
         if (value && inputMode === 'root') { await policyManager.addRoot(value); setMessage(`Added root: ${value}`); }
@@ -302,7 +305,9 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
           await policyManager.addCommandRule({ executable, argsPrefix, action: 'ask' });
           setMessage(`Added command rule: ${value} → ASK`);
         }
-        setInputMode(null); setBuffer(''); return;
+        setInputMode(null);
+        setBuffer('');
+        return;
       }
       if (key.backspace || key.delete) { setBuffer((value) => value.slice(0, -1)); return; }
       if (input && !key.ctrl && !key.meta) setBuffer((value) => value + input);
@@ -323,7 +328,6 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
       else if (input === 'c' || input === 'C') setScreen('commands');
       else if (input === 't' || input === 'T') setScreen('tools');
       else if (input === '?' || input === 'h' || input === 'H') setScreen('help');
-      else if (input === 'l' || input === 'L') setMessage(`Audit log: ${auditPath ?? '~/.buildifyx/audit.log'}`);
       return;
     }
 
@@ -339,6 +343,8 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
       } else if (input === 'a' || input === 'A') await applyProfile(policyManager, 'auto');
       else if (input === 'o' || input === 'O') await applyProfile(policyManager, 'readOnly');
       else if (input === 'f' || input === 'F') await applyProfile(policyManager, 'fullAccess');
+      else if (input === 'r' || input === 'R') setScreen('roots');
+      else if (input === 'c' || input === 'C') setScreen('commands');
       return;
     }
 
@@ -350,6 +356,7 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
       else if ((input === 'd' || input === 'D') && rootSelected > 0) {
         await policyManager.removeRoot(rootSelected - 1);
         setRootSelected((value) => Math.max(0, value - 1));
+        setMessage('Allowed root removed.');
       }
       return;
     }
@@ -361,10 +368,13 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
       else if ((key.leftArrow || key.rightArrow || input === ' ') && total) {
         const rule = policy.commandRules[commandSelected];
         await policyManager.addCommandRule({ ...rule, action: cycleAction(rule.action, key.leftArrow ? -1 : 1) });
-      } else if (input === 'a' || input === 'A') { setInputMode('command'); setBuffer(''); }
-      else if ((input === 'd' || input === 'D') && total) {
+      } else if (input === 'a' || input === 'A') {
+        setInputMode('command');
+        setBuffer('');
+      } else if ((input === 'd' || input === 'D') && total) {
         await policyManager.removeCommandRule(commandSelected);
         setCommandSelected((value) => Math.max(0, value - 1));
+        setMessage('Command rule removed.');
       }
     }
   });
@@ -373,7 +383,7 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
   if (screen === 'permissions') main = h(PermissionsScreen, { policy, selected: permissionSelected });
   else if (screen === 'roots') main = h(RootsScreen, { root, roots: policy.additionalRoots, selected: rootSelected, inputMode, buffer });
   else if (screen === 'commands') main = h(CommandsScreen, { rules: policy.commandRules, selected: commandSelected, inputMode, buffer });
-  else if (screen === 'tools') main = h(ToolsScreen, { manifest: toolManifest, manifestState: toolManifestState, toolsUrl });
+  else if (screen === 'tools') main = h(ToolsScreen, { manifest: toolManifest, manifestState: toolManifestState, toolsUrl, auditPath });
   else if (screen === 'help') main = h(HelpScreen);
   else main = h(Box, { flexDirection: layout.narrow ? 'column' : 'row' },
     h(ActivityPanel, { activities, selected: selectedIndex, layout }),
@@ -381,12 +391,9 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
   );
 
   return h(Box, { flexDirection: 'column', width: '100%', height: Math.max(16, layout.rows - 1) },
-    h(Header, { version, root, mode, profile, pendingCount: pending.length, layout, toolManifest, toolsChanged: toolManifestState?.changed }),
+    h(Header, { version, root, mode, profile, pendingCount: pending.length, layout }),
     main,
-    screen === 'dashboard' && layout.showPermissionsSummary
-      ? h(PermissionsSummary, { policy, profile, compact: layout.compact, toolManifest, toolsChanged: toolManifestState?.changed })
-      : null,
     h(Controls, { screen, inputMode, compact: layout.compact }),
-    h(Text, { color: toolManifestState?.changed ? 'yellow' : 'cyan', wrap: 'truncate-end' }, message)
+    h(Text, { color: message.startsWith('MCP tools changed') ? 'yellow' : 'cyan', wrap: 'truncate-end' }, message)
   );
 }

@@ -41,7 +41,9 @@ Ask your Buildifyx administrator for a login token, then run:
 bdxa login
 ```
 
-Paste the token when prompted.
+Paste the token when prompted. Interactive token input is masked so the token is not echoed to the terminal.
+
+If you run `bdxa` before signing in, an interactive terminal will guide you through this sign-in step automatically and then continue connecting the workspace.
 
 For internal automation you can also use:
 
@@ -83,6 +85,14 @@ Or choose the workspace explicitly:
 ```bash
 bdxa --root ~/projects/my-project
 ```
+
+For advanced command workflows, `--unrestricted-commands` permits arbitrary executable names. It does not bypass the local permission profile and it is not an OS sandbox:
+
+```bash
+bdxa --unrestricted-commands
+```
+
+`--full-access` remains as a legacy alias for `--unrestricted-commands`.
 
 `bdxa` now connects outward to Buildifyx Cloud. The computer does not need to expose a public port for normal cloud operation.
 
@@ -157,11 +167,11 @@ Available profiles are:
 ```text
 Auto
 Read only
-Full access
+Allow all
 Custom
 ```
 
-Full access is powerful and is not an operating-system sandbox. Commands run with the permissions of the operating-system user running `bdxa`.
+The Allow all permission profile skips local ASK prompts for configured tools, dangerous actions, and outside-workspace access. It does not make command execution an operating-system sandbox.
 
 ### ASK requests
 
@@ -226,14 +236,13 @@ The agent sends its tool count and schema hash to Buildifyx Cloud when connectin
 Main screen:
 
 ```text
-↑↓       Select activity
+↑↓       Select recent activity
 P        Permissions
-R        Allowed roots
-C        Command rules
-T        MCP tools
-L        Audit log information
 ? / H    Help
 Q        Back
+R        Allowed roots (advanced)
+C        Command rules (advanced)
+T        Diagnostics and MCP tools
 Ctrl+C   Quit
 ```
 
@@ -333,5 +342,5 @@ Press `T` in the TUI to see the current tool count and schema hash.
 - Device authentication uses a dedicated device credential, separate from the login token.
 - Command execution uses direct executable invocation rather than shell command strings.
 - File access is constrained by configured roots and path checks.
-- Full access is not an OS sandbox.
+- `--unrestricted-commands` is not an OS sandbox; commands run with the permissions of the operating-system user running `bdxa`.
 - Keep `~/.buildifyx/credentials.json` private.

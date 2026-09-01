@@ -40,10 +40,11 @@ export async function runCli(argv = process.argv.slice(2)) {
       await runStatus();
       return;
     case 'local':
-    case 'remote':
-    case 'r':
       await runRemote(args);
       return;
+    case 'remote':
+    case 'r':
+      throw new Error('`bdxa remote` has been removed. Use `bdxa` for Buildifyx Cloud or `bdxa local` for local development.');
     case 'doctor':
     case 'd':
       await runDoctor(args);

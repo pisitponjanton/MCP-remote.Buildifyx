@@ -5,48 +5,42 @@ Usage:
   bdxa [options]
   bdxa <command> [options]
 
-Default:
-  Running bdxa connects this device to Buildifyx Cloud at bdxa.buildifyx.com.
-  Login once with a one-time token before connecting.
+Getting started:
+  1. bdxa login          Sign in this computer
+  2. cd <workspace>      Open the project ChatGPT may use
+  3. bdxa                Connect to Buildifyx Cloud
 
 Commands:
-  login       Authenticate this device with a login token
-  logout      Revoke this device credential and remove it locally
-  status      Show device authentication status
-  connect     Connect to Buildifyx Cloud (same as default bdxa)
-  local       Start the legacy local MCP HTTP server for development
-  doctor, d   Check environment, root access, and package version
-  update, u   Update Buildifyx Desktop Agent from npm
+  login       Sign in and register this computer
+  logout      Sign out and revoke this device credential
+  status      Show whether this device is ready to connect
+  connect     Connect to Buildifyx Cloud (same as running bdxa)
+  doctor      Check the local agent environment
+  update      Update Buildifyx Desktop Agent from npm
   help        Show this help message
 
-Global options:
+Options:
+  --root <path>     Workspace ChatGPT may access (default: current directory)
   -h, --help        Show help
   -v, --version     Show installed version
 
-Cloud options:
-  --root <path>     Primary workspace root (default: current directory)
-  --full-access     Permit arbitrary executable names; execution is not sandboxed
-  --no-tui          Disable the interactive TUI; ASK returns confirmation-required
-
-Login options:
-  --token <token>   Login token (prefer interactive input to avoid shell history)
-  --cloud <url>     Cloud origin (default: https://bdxa.buildifyx.com)
-
-Local development options:
-  --root <path>     Primary workspace root
-  --port <number>   Local MCP port (default: 3333)
-  --full-access     Permit arbitrary executable names
-  --no-tui          Disable the interactive TUI
-
 Examples:
   bdxa login
+  bdxa
+  bdxa --root ~/projects/my-app
   bdxa status
-  bdxa --root ~/projects
-  bdxa connect --root ~/projects
-  bdxa logout
-  bdxa local --root ~/projects --port 3333
   bdxa doctor
-  bdxa update
-  bdxa -v
+
+Advanced:
+  bdxa local [--root <path>] [--port 3333]   Start the local MCP server for development
+  --unrestricted-commands                    Permit arbitrary executable names; not sandboxed
+  --no-tui                                   Disable the interactive terminal UI
+  bdxa login --cloud <url>                   Use a custom Buildifyx Cloud origin
+  bdxa login --token <token>                 Non-interactive login; may expose token in shell history
+
+Legacy compatibility:
+  --full-access                              Alias for --unrestricted-commands
+
+Run bdxa inside the workspace you want ChatGPT to use. Dangerous actions and access outside allowed roots still follow your local permission policy.
 `);
 }

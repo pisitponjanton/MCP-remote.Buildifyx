@@ -8,11 +8,31 @@ export async function runDoctor(args) {
   const versionStatus = await checkForUpdate(metadata.name, metadata.version);
 
   console.log('Buildifyx Desktop Agent doctor');
-  console.log(`Node:     ${process.version}`);
-  console.log(`Platform: ${process.platform} ${process.arch}`);
-  console.log(`Root:     ${root}`);
-  console.log(`Version:  ${metadata.version}${versionStatus.updateAvailable && versionStatus.latestVersion ? ` (latest: ${versionStatus.latestVersion})` : ''}`);
-  if (versionStatus.error) console.log(`Registry: unavailable (${versionStatus.error})`);
-  else if (!versionStatus.updateAvailable) console.log('Registry: latest');
-  console.log('Status:   OK');
+  console.log('');
+  console.log('Environment');
+  console.log(`  Node       ${process.version}`);
+  console.log(`  Platform   ${process.platform} ${process.arch}`);
+  console.log(`  Workspace  ${root}`);
+  console.log(`  Version    ${metadata.version}`);
+  console.log('');
+
+  if (versionStatus.error) {
+    console.log('! npm registry could not be checked');
+    console.log(`  ${versionStatus.error}`);
+    console.log('');
+    console.log('Status: OK with warnings');
+    return;
+  }
+
+  if (versionStatus.updateAvailable && versionStatus.latestVersion) {
+    console.log(`! Update available: ${versionStatus.latestVersion}`);
+    console.log('  Run `bdxa update` to install it.');
+    console.log('');
+    console.log('Status: UPDATE AVAILABLE');
+    return;
+  }
+
+  console.log('✓ npm package is up to date');
+  console.log('');
+  console.log('Status: OK');
 }

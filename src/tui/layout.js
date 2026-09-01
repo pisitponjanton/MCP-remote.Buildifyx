@@ -25,8 +25,7 @@ export function useTuiLayout() {
   return useMemo(() => {
     const narrow = columns < 84;
     const compact = columns < 110 || rows < 30;
-    const showPermissionsSummary = rows >= 22;
-    const reservedRows = showPermissionsSummary ? 13 : 8;
+    const reservedRows = 8;
     const availableRows = Math.max(8, rows - reservedRows);
     const panelHeight = narrow
       ? Math.max(7, Math.floor(availableRows / 2))
@@ -38,7 +37,6 @@ export function useTuiLayout() {
       rows,
       narrow,
       compact,
-      showPermissionsSummary,
       panelHeight,
       activityWindow,
       activityWidth: narrow ? '100%' : compact ? '55%' : '60%',

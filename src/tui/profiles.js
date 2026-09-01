@@ -3,7 +3,7 @@ export const PROFILE_ORDER = ['auto', 'readOnly', 'fullAccess', 'custom'];
 export const PROFILES = Object.freeze({
   auto: {
     label: 'Auto',
-    description: 'Read, edit and normal commands automatically; ask for dangerous or outside-root access.',
+    description: 'Read, edit and normal commands automatically; ask for dangerous or outside-workspace access.',
     categories: { read: 'allow', write: 'allow', command: 'allow', dangerous: 'ask', outsideRoot: 'ask' }
   },
   readOnly: {
@@ -12,8 +12,8 @@ export const PROFILES = Object.freeze({
     categories: { read: 'allow', write: 'ask', command: 'ask', dangerous: 'ask', outsideRoot: 'ask' }
   },
   fullAccess: {
-    label: 'Full access',
-    description: 'Allow all configured tools, dangerous commands and outside-root access without asking.',
+    label: 'Allow all',
+    description: 'Allow configured tools, dangerous actions and outside-workspace access without asking.',
     categories: { read: 'allow', write: 'allow', command: 'allow', dangerous: 'allow', outsideRoot: 'allow' }
   },
   custom: {

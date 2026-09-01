@@ -5,6 +5,7 @@ import { parseInvocation } from '../../src/cli/options.js';
 test('bdxa defaults to cloud mode', () => {
   assert.deepEqual(parseInvocation([]), { command: 'cloud', args: [] });
   assert.deepEqual(parseInvocation(['--root', '/tmp/project']), { command: 'cloud', args: ['--root', '/tmp/project'] });
+  assert.deepEqual(parseInvocation(['--unrestricted-commands']), { command: 'cloud', args: ['--unrestricted-commands'] });
 });
 
 test('local mode remains explicitly available', () => {

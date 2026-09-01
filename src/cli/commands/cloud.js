@@ -11,21 +11,49 @@ import { createCloudAgent } from '../../transport/cloud.js';
 import { isCredentialExpired, loadCredentials } from '../../utils/credentials.js';
 import { getPackageMetadata } from '../../version.js';
 import { getOption, hasFlag, resolveRoot } from '../options.js';
+import { runLogin } from './login.js';
+
+async function ensureCredentials() {
+  let credentials = await loadCredentials();
+  const interactive = process.stdin.isTTY && process.stdout.isTTY;
+
+  if (!credentials) {
+    if (!interactive) throw new Error('This device is not signed in. Run `bdxa login` first.');
+
+    console.log('Buildifyx Desktop Agent');
+    console.log('');
+    console.log('This computer is not signed in yet.');
+    console.log('Sign in once, then bdxa will connect this workspace to Buildifyx Cloud.');
+    console.log('');
+    await runLogin([], { showConnectHint: false });
+    credentials = await loadCredentials();
+  }
+
+  if (credentials && isCredentialExpired(credentials)) {
+    if (!interactive) throw new Error('This device sign-in has expired. Run `bdxa login` again.');
+
+    console.log('Your device sign-in has expired.');
+    console.log('Enter a new login token to reconnect this computer.');
+    console.log('');
+    await runLogin([], { showConnectHint: false });
+    credentials = await loadCredentials();
+  }
+
+  if (!credentials) throw new Error('Could not load the device credential after sign-in.');
+  return credentials;
+}
 
 export async function runCloud(args) {
-  const credentials = await loadCredentials();
-  if (!credentials) throw new Error('Not logged in. Run `bdxa login` first.');
-  if (isCredentialExpired(credentials)) throw new Error('Device credential has expired. Run `bdxa login` again.');
-
+  const credentials = await ensureCredentials();
   const root = await resolveRoot(getOption(args, '--root', process.cwd()));
-  const fullAccess = hasFlag(args, '--full-access');
+  const unrestrictedCommands = hasFlag(args, '--unrestricted-commands') || hasFlag(args, '--full-access');
   const useTui = process.stdin.isTTY && process.stdout.isTTY && !hasFlag(args, '--no-tui');
   const metadata = await getPackageMetadata();
   const policy = await loadPolicy();
   const policyManager = createPolicyManager(policy);
-  const runtime = createRuntime({ root, fullAccess, policyManager, interactive: useTui });
+  const runtime = createRuntime({ root, fullAccess: unrestrictedCommands, policyManager, interactive: useTui });
   const audit = createAuditLogger({ eventBus: runtime.eventBus });
-  const manifest = createToolManifest({ fullAccess });
+  const manifest = createToolManifest({ fullAccess: unrestrictedCommands });
   const manifestState = await inspectToolManifest(manifest);
   audit.start();
 
@@ -61,12 +89,15 @@ export async function runCloud(args) {
   cloud.connect();
 
   if (!useTui) {
-    console.log(`Cloud:   ${cloud.endpoint}`);
-    console.log(`Device:  ${credentials.deviceName ?? credentials.deviceId}`);
-    console.log(`Root:    ${root}`);
-    console.log(`Audit:   ${audit.filePath}`);
-    console.log(`Tools:   ${manifest.count} (${manifest.shortHash})${manifestState.changed ? ' CHANGED' : ''}`);
-    console.log('TUI:     disabled (Ask permissions return CONFIRMATION_REQUIRED)');
+    console.log('Buildifyx Desktop Agent');
+    console.log('');
+    console.log('● Connected');
+    console.log(`  Workspace  ${root}`);
+    console.log(`  Device     ${credentials.deviceName ?? credentials.deviceId}`);
+    console.log(`  Cloud      ${cloud.endpoint}`);
+    console.log(`  Commands   ${unrestrictedCommands ? 'Unrestricted executable names (not sandboxed)' : 'Restricted by local command policy'}`);
+    console.log('');
+    console.log('Interactive approvals are disabled. Requests requiring approval will return CONFIRMATION_REQUIRED.');
     return;
   }
 
@@ -76,7 +107,7 @@ export async function runCloud(args) {
     policyManager,
     version: metadata.version,
     root,
-    mode: fullAccess ? 'CLOUD · FULL ACCESS (not sandboxed)' : 'CLOUD · restricted',
+    mode: unrestrictedCommands ? 'Unrestricted commands · not sandboxed' : 'Restricted commands',
     auditPath: audit.filePath,
     toolManifest: manifest,
     toolManifestState: manifestState,
