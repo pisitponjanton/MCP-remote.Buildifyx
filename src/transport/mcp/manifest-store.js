@@ -1,10 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
+import { buildifyxHome } from '../../utils/home.js';
 
 export function defaultToolManifestPath(scope = 'default') {
   const suffix = scope === 'default' ? '' : `-${scope}`;
-  return path.join(os.homedir(), '.buildifyx', `tool-manifest${suffix}.json`);
+  return path.join(buildifyxHome(), `tool-manifest${suffix}.json`);
 }
 
 export async function loadPreviousToolManifest(filePath = defaultToolManifestPath()) {

@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { createRuntime } from '../../src/core/runtime.js';
 import { createPolicyManager } from '../../src/permissions/manager.js';
+import { evaluateRequest } from '../../src/permissions/evaluator.js';
 import { normalizePolicy } from '../../src/permissions/policy.js';
 
 async function withTemp(callback) {
@@ -94,4 +95,35 @@ test('audit events redact write content while preserving tool metadata', async (
     assert.equal(started.input.content, '<18 chars>');
     assert.equal(runtime.eventBus.getHistory().some((event) => event.type === 'resource.accessed' && event.operation === 'create'), true);
   });
+});
+
+test('auto policy asks before script-capable package-manager and mutating git commands', () => {
+  const policy = normalizePolicy();
+  const askCases = [
+    { command: 'npm', args: ['run', 'build'] },
+    { command: 'npm', args: ['install'] },
+    { command: 'pnpm', args: ['exec', 'node', '--version'] },
+    { command: 'yarn', args: ['dlx', 'example'] },
+    { command: 'git', args: ['config', 'alias.shell', '!node -e process.exit(0)'] },
+    { command: 'git', args: ['checkout', '-b', 'feature'] }
+  ];
+
+  for (const input of askCases) {
+    const evaluation = evaluateRequest({ toolName: 'run_command', input, policy });
+    assert.equal(evaluation.decision, 'ask', `${input.command} ${input.args.join(' ')} should require approval`);
+    assert.equal(evaluation.category, 'dangerous');
+  }
+
+  const safeCases = [
+    { command: 'npm', args: ['view', 'react', 'version'] },
+    { command: 'npm', args: ['config', 'get', 'registry'] },
+    { command: 'git', args: ['status', '--short'] },
+    { command: 'git', args: ['branch', '--show-current'] }
+  ];
+
+  for (const input of safeCases) {
+    const evaluation = evaluateRequest({ toolName: 'run_command', input, policy });
+    assert.equal(evaluation.decision, 'allow', `${input.command} ${input.args.join(' ')} should stay in restricted auto mode`);
+    assert.equal(evaluation.category, 'command');
+  }
 });

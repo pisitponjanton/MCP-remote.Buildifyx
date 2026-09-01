@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process';
 import { mkdir, open, readFile, readdir, readlink, rename, rm, stat, writeFile } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -9,11 +8,14 @@ import {
   probeInstanceControl,
   requestInstanceControl
 } from './instance-control.js';
+import { buildifyxHome } from './home.js';
 
-export const DEFAULT_INSTANCES_DIR = path.join(os.homedir(), '.buildifyx', 'instances');
+export const DEFAULT_INSTANCES_DIR = path.join(buildifyxHome(), 'instances');
+const PACKAGE_NAME = '@buildifyx/desktop-agent';
 const MANAGEMENT_COMMANDS = new Set(['login', 'logout', 'status', 'ls', 'ps', 'inspect', 'attach', 'rm', 'doctor', 'd', 'update', 'u', 'help', '-h', '--help', '-v', '--version', 'local', 'remote', 'r']);
 
 function isDefaultInstancesDirectory(directory) {
+  if (process.env.BUILDFYX_HOME?.trim()) return false;
   return path.resolve(directory) === path.resolve(DEFAULT_INSTANCES_DIR);
 }
 
@@ -177,6 +179,28 @@ export function parseBdxaAgentProcessCommand(command) {
   };
 }
 
+function cliEntrypointFromCommand(command) {
+  const match = command.match(/(?:^|\s)(?:\"([^\"]*src\/cli\.js)\"|'([^']*src\/cli\.js)'|(\S*src\/cli\.js))(?:\s|$)/);
+  return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
+}
+
+export async function isBuildifyxAgentProcessCommand(command, cwd = null) {
+  const entrypoint = cliEntrypointFromCommand(command);
+  if (!entrypoint) return false;
+  if (!path.isAbsolute(entrypoint) && !cwd) return false;
+
+  const resolvedEntrypoint = path.isAbsolute(entrypoint)
+    ? path.resolve(entrypoint)
+    : path.resolve(cwd, entrypoint);
+  const packagePath = path.join(path.dirname(path.dirname(resolvedEntrypoint)), 'package.json');
+  try {
+    const metadata = JSON.parse(await readFile(packagePath, 'utf8'));
+    return metadata?.name === PACKAGE_NAME;
+  } catch {
+    return false;
+  }
+}
+
 async function processCwd(pid) {
   if (process.platform === 'linux') {
     try { return await readlink(`/proc/${pid}/cwd`); } catch { return null; }
@@ -201,6 +225,7 @@ async function discoverAgentProcesses() {
     const parsed = parseBdxaAgentProcessCommand(command);
     if (!parsed) continue;
     const cwd = await processCwd(pid);
+    if (!(await isBuildifyxAgentProcessCommand(command, cwd))) continue;
     const workspace = parsed.root ? path.resolve(cwd ?? process.cwd(), parsed.root) : cwd;
     if (!workspace) continue;
     found.push({

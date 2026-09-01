@@ -11,8 +11,12 @@ export async function runLogout() {
   try {
     await logoutDevice({ cloudUrl: credentials.cloudUrl, deviceToken: credentials.deviceToken });
   } catch (error) {
-    console.log(`Cloud revoke failed: ${error.message}`);
-    console.log('Removing local credentials anyway.');
+    if (error?.status === 401 || error?.status === 403) {
+      await clearCredentials();
+      console.log('✓ Local sign-in removed; Buildifyx Cloud no longer accepts this device credential.');
+      return;
+    }
+    throw new Error(`Could not revoke the device credential: ${error.message}. Local credentials were kept so you can retry logout safely.`);
   }
 
   await clearCredentials();

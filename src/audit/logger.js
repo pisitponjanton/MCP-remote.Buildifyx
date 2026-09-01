@@ -1,9 +1,9 @@
 import { mkdir, appendFile } from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
+import { buildifyxHome } from '../utils/home.js';
 
 export function defaultAuditPath() {
-  return path.join(os.homedir(), '.buildifyx', 'audit.log');
+  return path.join(buildifyxHome(), 'audit.log');
 }
 
 export function createAuditLogger({ eventBus, filePath = defaultAuditPath(), context = null }) {

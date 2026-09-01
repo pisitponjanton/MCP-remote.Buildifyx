@@ -304,12 +304,14 @@ export async function runCloud(args) {
   let control = null;
   let unsubscribeCloud = () => {};
   let onSignal = null;
+  let registryUpdate = Promise.resolve();
 
   const shutdown = async () => {
     if (closing) return;
     closing = true;
     unsubscribeCloud();
     audit.stop();
+    await registryUpdate.catch(() => undefined);
     await cloud.stop();
     if (control) await control.close().catch(() => undefined);
     control = null;
@@ -404,18 +406,27 @@ export async function runCloud(args) {
     await startControl();
   } catch (error) {
     audit.stop();
-    await resetInstancePolicy(instanceId).catch(() => undefined);
-    await removeInstanceRecord(instanceId);
-    await releaseInstanceName(name, instanceId).catch(() => undefined);
+    if (handoffChild && suppliedInstanceId) {
+      await updateInstance(instanceId, { status: 'handoff_failed', lastError: error?.message ?? String(error) }).catch(() => undefined);
+    } else {
+      await resetInstancePolicy(instanceId).catch(() => undefined);
+      await removeInstanceRecord(instanceId);
+      await releaseInstanceName(name, instanceId).catch(() => undefined);
+    }
     throw error;
   }
 
   unsubscribeCloud = cloud.subscribe((state) => {
-    void updateInstance(instanceId, {
-      status: state.status,
-      ...(state.connectedAt ? { connectedAt: state.connectedAt } : {}),
-      lastError: state.lastError ?? null
-    }).catch(() => undefined);
+    registryUpdate = registryUpdate
+      .then(() => {
+        if (closing) return undefined;
+        return updateInstance(instanceId, {
+          status: state.status,
+          ...(state.connectedAt ? { connectedAt: state.connectedAt } : {}),
+          lastError: state.lastError ?? null
+        });
+      })
+      .catch(() => undefined);
     if (state.status === 'revoked') void shutdownAndExit(0);
   });
 

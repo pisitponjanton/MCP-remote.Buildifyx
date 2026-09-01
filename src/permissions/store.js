@@ -1,12 +1,8 @@
 import { access, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import os from 'node:os';
 import path from 'node:path';
+import { buildifyxHome } from '../utils/home.js';
 import { normalizePolicy } from './policy.js';
-
-function buildifyxHome() {
-  return path.join(os.homedir(), '.buildifyx');
-}
 
 export function defaultPolicyPath(baseDirectory = buildifyxHome()) {
   return path.join(baseDirectory, 'policy.json');

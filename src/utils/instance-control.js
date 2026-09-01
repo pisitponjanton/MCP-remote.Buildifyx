@@ -1,10 +1,10 @@
 import net from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, rm } from 'node:fs/promises';
+import { buildifyxHome } from './home.js';
 
-const DEFAULT_INSTANCES_DIR = path.join(os.homedir(), '.buildifyx', 'instances');
+const DEFAULT_INSTANCES_DIR = path.join(buildifyxHome(), 'instances');
 
 export function instanceControlPath(instanceId, directory = DEFAULT_INSTANCES_DIR) {
   const key = createHash('sha256').update(String(instanceId)).digest('hex').slice(0, 20);

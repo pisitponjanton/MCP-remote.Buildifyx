@@ -4,8 +4,8 @@
   "description": "Buildifyx cloud-connected desktop agent for securely running MCP tools on a user-controlled machine.",
   "type": "module",
   "bin": {
-    "bdxa": "./src/cli.js",
-    "buildifyx-agent": "./src/cli.js"
+    "bdxa": "src/cli.js",
+    "buildifyx-agent": "src/cli.js"
   },
   "scripts": {
     "start": "node ./src/cli.js",
@@ -18,8 +18,20 @@
   },
   "files": [
     "src",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pisitponjanton/MCP-remote.Buildifyx.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pisitponjanton/MCP-remote.Buildifyx/issues"
+  },
+  "homepage": "https://github.com/pisitponjanton/MCP-remote.Buildifyx#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "ink": "^6.8.0",
     "react": "^19.2.8",

@@ -1,8 +1,8 @@
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
+import { buildifyxHome } from './home.js';
 
-export const DEFAULT_CREDENTIALS_FILE = path.join(os.homedir(), '.buildifyx', 'credentials.json');
+export const DEFAULT_CREDENTIALS_FILE = path.join(buildifyxHome(), 'credentials.json');
 
 export async function loadCredentials(filePath = DEFAULT_CREDENTIALS_FILE) {
   try {

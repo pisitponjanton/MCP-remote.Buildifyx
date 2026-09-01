@@ -49,6 +49,6 @@ Examples:
   bdxa rm -f $(bdxa ls -q)
   bdxa rm --all
 
-Each instanceId owns its own Permissions, additional allowed roots, and command rules, even when multiple instances use the same workspace path. New instances start from defaults; removing/stopping an instance deletes its local policy. Foreground → background handoff and bdxa attach keep the same instanceId and therefore preserve that running instance's settings. Buildifyx Desktop Agent 0.2+ connects through Buildifyx Cloud only.
+Each instanceId owns its own Permissions, additional allowed roots, and command rules, even when multiple instances use the same workspace path. New instances start from defaults; bdxa rm explicitly deletes the removed instance's local policy. Foreground Ctrl+C stops the process without being treated as an explicit policy reset. Foreground → background handoff and bdxa attach keep the same instanceId and therefore preserve that running instance's settings. Buildifyx Desktop Agent 0.2+ connects through Buildifyx Cloud only.
 `);
 }

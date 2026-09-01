@@ -172,7 +172,7 @@ Command rules
 Remembered command/location approvals
 ```
 
-A brand-new instance always starts from the default policy; legacy workspace-level or device-level policy is not imported. The same `instanceId` keeps its settings while it remains the same live instance (including foreground → background handoff and `bdxa attach`). When the instance is removed or exits, its instance policy is deleted, so the next instance starts clean.
+A brand-new instance always starts from the default policy; legacy workspace-level or device-level policy is not imported. The same `instanceId` keeps its settings while it remains the same live instance (including foreground → background handoff and `bdxa attach`). `bdxa rm <name|id>` deletes that instance policy. A normal foreground `Ctrl+C` stops the process and removes its registry entry without treating the stop as an explicit policy reset; the next normal start still receives a new `instanceId` and therefore starts from defaults.
 
 Because `bdxa attach` talks to the running instance over its verified local control channel, editing Permissions/Roots/Commands from an attached dashboard updates only that selected instance.
 

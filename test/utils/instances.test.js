@@ -10,6 +10,7 @@ import {
   findInstance,
   listInstances,
   loadInstance,
+  isBuildifyxAgentProcessCommand,
   parseBdxaAgentProcessCommand,
   releaseInstanceName,
   removeInstanceRecord,
@@ -214,4 +215,18 @@ test('process parser recognizes agent invocations and ignores management command
   );
   assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js ls'), null);
   assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js status'), null);
+});
+
+test('process recovery verifies the bdxa package identity before trusting src/cli.js', async () => {
+  await withTempDir(async (directory) => {
+    const src = path.join(directory, 'src');
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(src, 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
+
+    await writeFile(path.join(directory, 'package.json'), JSON.stringify({ name: 'some-other-cli' }), 'utf8');
+    assert.equal(await isBuildifyxAgentProcessCommand('node ./src/cli.js', directory), false);
+
+    await writeFile(path.join(directory, 'package.json'), JSON.stringify({ name: '@buildifyx/desktop-agent' }), 'utf8');
+    assert.equal(await isBuildifyxAgentProcessCommand('node ./src/cli.js', directory), true);
+  });
 });
