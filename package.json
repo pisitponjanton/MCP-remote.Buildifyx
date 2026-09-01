@@ -1,6 +1,6 @@
 {
   "name": "@buildifyx/desktop-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Buildifyx cloud-connected desktop agent for securely running MCP tools on a user-controlled machine.",
   "type": "module",
   "bin": {
@@ -21,8 +21,6 @@
     "README.md"
   ],
   "dependencies": {
-    "@modelcontextprotocol/node": "2.0.0",
-    "@modelcontextprotocol/server": "2.0.0",
     "ink": "^6.8.0",
     "react": "^19.2.8",
     "ws": "^8.21.3",

@@ -6,12 +6,13 @@ export function defaultAuditPath() {
   return path.join(os.homedir(), '.buildifyx', 'audit.log');
 }
 
-export function createAuditLogger({ eventBus, filePath = defaultAuditPath() }) {
+export function createAuditLogger({ eventBus, filePath = defaultAuditPath(), context = null }) {
   let unsubscribe;
 
   async function writeEvent(event) {
     await mkdir(path.dirname(filePath), { recursive: true });
-    await appendFile(filePath, `${JSON.stringify(event)}\n`, 'utf8');
+    const record = context ? { ...event, instance: context } : event;
+    await appendFile(filePath, `${JSON.stringify(record)}\n`, 'utf8');
   }
 
   function start() {

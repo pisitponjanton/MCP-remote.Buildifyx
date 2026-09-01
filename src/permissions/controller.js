@@ -57,6 +57,7 @@ export function createPermissionController({ root, policyManager, approvalQueue,
         throw new AgentError(ErrorCode.CONFIRMATION_REQUIRED, `Confirmation required: ${describeRequest(toolName, input)}`);
       }
       const decision = await approvalQueue.request({
+        id: requestId,
         toolName,
         input,
         description: describeRequest(toolName, input),

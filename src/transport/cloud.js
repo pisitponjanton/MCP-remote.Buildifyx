@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import { normalizeError } from '../core/errors.js';
 
 export const DEFAULT_CLOUD_ORIGIN = 'https://bdxa.buildifyx.com';
+export const AGENT_PROTOCOL_VERSION = 2;
 
 export function normalizeCloudOrigin(value = DEFAULT_CLOUD_ORIGIN) {
   const url = new URL(value);
@@ -82,6 +83,7 @@ export function createCloudAgent({
   runtime,
   manifest,
   version,
+  instance,
   deviceInfo,
   eventBus,
   heartbeatMs = 30_000,
@@ -94,7 +96,7 @@ export function createCloudAgent({
   let retryTimer = null;
   let retryAttempt = 0;
   const listeners = new Set();
-  let state = { status: 'disconnected', endpoint, retryAttempt: 0, lastError: null };
+  let state = { status: 'disconnected', endpoint, instanceId: instance.instanceId, retryAttempt: 0, lastError: null };
 
   function setState(patch) {
     state = { ...state, ...patch };
@@ -112,27 +114,44 @@ export function createCloudAgent({
       retryTimer = null;
       connect();
     }, delay);
-    retryTimer.unref?.();
   }
 
   async function handleMessage(raw) {
     let message;
     try { message = JSON.parse(raw.toString()); } catch { return; }
+
     if (message.type === 'ping') {
-      safeSend(socket, { type: 'pong', timestamp: new Date().toISOString() });
+      safeSend(socket, { type: 'pong', instanceId: instance.instanceId, timestamp: new Date().toISOString() });
       return;
     }
+
+    if (message.type === 'tool.cancel' && message.requestId) {
+      runtime.cancel?.(message.requestId, message.reason ?? 'Cloud request was cancelled');
+      return;
+    }
+
     if (message.type !== 'tool.call' || !message.requestId || !message.tool) return;
 
-    eventBus?.emit('cloud.tool.received', { requestId: message.requestId, tool: message.tool });
+    if (message.instanceId && message.instanceId !== instance.instanceId) {
+      safeSend(socket, {
+        type: 'tool.error',
+        requestId: message.requestId,
+        instanceId: instance.instanceId,
+        error: { code: 'INSTANCE_MISMATCH', message: 'Tool call was routed to the wrong bdxa instance.' }
+      });
+      return;
+    }
+
+    eventBus?.emit('cloud.tool.received', { requestId: message.requestId, tool: message.tool, instanceId: instance.instanceId });
     try {
-      const result = await runtime.dispatch(message.tool, message.arguments ?? {});
-      safeSend(socket, { type: 'tool.result', requestId: message.requestId, result });
+      const result = await runtime.dispatch(message.tool, message.arguments ?? {}, { requestId: message.requestId });
+      safeSend(socket, { type: 'tool.result', requestId: message.requestId, instanceId: instance.instanceId, result });
     } catch (error) {
       const normalized = normalizeError(error);
       safeSend(socket, {
         type: 'tool.error',
         requestId: message.requestId,
+        instanceId: instance.instanceId,
         error: { code: normalized.code, message: normalized.message, details: normalized.details }
       });
     }
@@ -154,7 +173,11 @@ export function createCloudAgent({
       setState({ status: 'connected', retryAttempt: 0, retryInMs: null, connectedAt: new Date().toISOString() });
       safeSend(socket, {
         type: 'device.ready',
+        protocolVersion: AGENT_PROTOCOL_VERSION,
         deviceId: credentials.deviceId,
+        instanceId: instance.instanceId,
+        workspace: { name: instance.name, path: instance.path },
+        mode: instance.mode,
         agentVersion: version,
         device: deviceInfo,
         toolManifest: { count: manifest.count, hash: manifest.hash, manifestVersion: manifest.manifestVersion }
@@ -162,7 +185,9 @@ export function createCloudAgent({
       clearInterval(heartbeat);
       heartbeat = setInterval(() => safeSend(socket, {
         type: 'device.heartbeat',
+        protocolVersion: AGENT_PROTOCOL_VERSION,
         deviceId: credentials.deviceId,
+        instanceId: instance.instanceId,
         timestamp: new Date().toISOString()
       }), heartbeatMs);
       heartbeat.unref?.();
@@ -174,7 +199,13 @@ export function createCloudAgent({
       clearInterval(heartbeat);
       heartbeat = null;
       socket = null;
-      setState({ status: 'disconnected', closeCode: code, closeReason: reason.toString() || null });
+      const closeReason = reason.toString() || null;
+      if (code === 4003 || code === 4004) {
+        stopped = true;
+        setState({ status: 'revoked', closeCode: code, closeReason, lastError: closeReason });
+        return;
+      }
+      setState({ status: 'disconnected', closeCode: code, closeReason });
       scheduleReconnect();
     });
   }
@@ -185,7 +216,10 @@ export function createCloudAgent({
     clearTimeout(retryTimer);
     heartbeat = null;
     retryTimer = null;
-    if (!socket) return;
+    if (!socket) {
+      setState({ status: 'stopped' });
+      return;
+    }
     await new Promise((resolve) => {
       const active = socket;
       const timeout = setTimeout(resolve, 1000);

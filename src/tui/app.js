@@ -26,13 +26,11 @@ function title(text) {
 
 function approvalChoices(request) {
   const choices = [{ label: 'Allow once', action: 'allow', remember: null }];
-
   if (request.toolName === 'run_command') {
     choices.push({ label: 'Always allow this command', action: 'allow', remember: 'command' });
   } else if (request.pathInfo?.scope === 'outside') {
     choices.push({ label: 'Always allow this location', action: 'allow', remember: 'root' });
   }
-
   choices.push({ label: 'Deny', action: 'deny', remember: null });
   return choices;
 }
@@ -45,9 +43,20 @@ function approvalImpact(request) {
   return request.evaluation?.reason ?? request.category;
 }
 
-function Header({ version, root, mode, profile, pendingCount, layout }) {
-  const connection = pendingCount ? `● APPROVAL ${pendingCount}` : '● CONNECTED';
+function Header({ version, root, instanceName, instanceId, mode, profile, pendingCount, connectionStatus, layout }) {
+  const connection = pendingCount
+    ? `● APPROVAL ${pendingCount}`
+    : connectionStatus === 'connected'
+      ? '● CONNECTED'
+      : connectionStatus === 'reconnecting'
+        ? '◐ RECONNECTING'
+        : connectionStatus === 'revoked'
+          ? '● REVOKED'
+          : connectionStatus === 'disconnected'
+            ? '○ DISCONNECTED'
+            : '◐ CONNECTING';
   const access = `${PROFILES[profile].label} · ${mode}`;
+  const shortId = String(instanceId ?? '').replace(/^inst_/, '').slice(0, 8);
 
   return h(Box, { flexDirection: 'column', marginBottom: 1 },
     h(Box, { justifyContent: 'space-between' },
@@ -55,6 +64,7 @@ function Header({ version, root, mode, profile, pendingCount, layout }) {
       h(Text, { bold: true }, connection)
     ),
     layout.narrow ? h(Text, { dimColor: true }, `v${version}`) : null,
+    h(Text, null, `Instance   ${instanceName}${shortId ? ` · ${shortId}` : ''}`),
     h(Text, { wrap: 'truncate-end' }, `Workspace  ${root}`),
     h(Text, null, `Access     ${access}`)
   );
@@ -106,9 +116,8 @@ function RequestDetails({ item, compact }) {
   );
 }
 
-function ApprovalPanel({ request, selected }) {
+function ApprovalPanel({ request, selected, attached = false }) {
   const choices = approvalChoices(request);
-
   return h(Box, { flexDirection: 'column' },
     h(Text, { bold: true }, 'APPROVAL REQUIRED'),
     h(Text, null, ''),
@@ -118,29 +127,33 @@ function ApprovalPanel({ request, selected }) {
     h(Text, null, ''),
     ...choices.map((choice, index) => h(Text, { key: choice.label, bold: selected === index }, `${selected === index ? '›' : ' '} ${choice.label}`)),
     h(Text, null, ''),
-    h(Text, { dimColor: true }, '↑↓ Select   Enter Confirm   Q Back/Deny   Ctrl+C Quit')
+    h(Text, { dimColor: true }, `↑↓ Select   Enter Confirm   Q Back/Deny   Ctrl+C ${attached ? 'Detach' : 'Stop'}`)
   );
 }
 
-function StatusPanel({ selectedItem, request, approvalSelected, layout }) {
+function StatusPanel({ selectedItem, request, approvalSelected, layout, attached = false }) {
   return h(Box, { width: layout.statusWidth, borderStyle: 'classic', paddingX: 1, flexDirection: 'column', height: layout.panelHeight },
     request
-      ? h(ApprovalPanel, { request, selected: approvalSelected })
+      ? h(ApprovalPanel, { request, selected: approvalSelected, attached })
       : h(React.Fragment, null, title('DETAILS'), h(RequestDetails, { item: selectedItem, compact: layout.compact }))
   );
 }
 
-function Controls({ screen, inputMode, compact }) {
+function Controls({ screen, inputMode, compact, attached = false, canBackground = false, backgroundConfirm = false }) {
+  const exitLabel = attached ? 'Ctrl+C Detach' : 'Ctrl+C Stop';
   let lines;
-  if (inputMode) lines = ['Enter Save   Q on empty input Back   Ctrl+C Quit'];
-  else if (screen === 'permissions') lines = ['↑↓ Select   ←→ Change   A Auto   O Read-only   F Allow-all', 'R Roots   C Command rules   Q Back   Ctrl+C Quit'];
-  else if (screen === 'roots') lines = ['↑↓ Select   A Add root   D Delete root   Q Back   Ctrl+C Quit'];
-  else if (screen === 'commands') lines = ['↑↓ Select   ←→ Change   A Add rule   D Delete rule   Q Back   Ctrl+C Quit'];
-  else if (screen === 'tools') lines = ['Q Back   Ctrl+C Quit'];
-  else if (screen === 'help') lines = ['Q Back   Ctrl+C Quit'];
-  else lines = compact
-    ? ['↑↓ Activity   P Permissions   ? Help   Ctrl+C Quit']
-    : ['↑↓ Activity   P Permissions   ? Help   Q Back   Ctrl+C Quit', 'R Allowed roots   C Command rules   T Diagnostics'];
+  if (backgroundConfirm) lines = ['Enter Confirm background   Q Back   Ctrl+C Stop'];
+  else if (inputMode) lines = [`Enter Save   Q on empty input Back   ${exitLabel}`];
+  else if (screen === 'permissions') lines = ['↑↓ Select   ←→ Change   A Auto   O Read-only   F Allow-all', `R Roots   C Command rules   Q Back   ${exitLabel}`];
+  else if (screen === 'roots') lines = [`↑↓ Select   A Add root   D Delete root   Q Back   ${exitLabel}`];
+  else if (screen === 'commands') lines = [`↑↓ Select   ←→ Change   A Add rule   D Delete rule   Q Back   ${exitLabel}`];
+  else if (screen === 'tools') lines = [`Q Back   ${exitLabel}`];
+  else if (screen === 'help') lines = [`Q Back   ${exitLabel}`];
+  else if (compact) lines = [`↑↓ Activity   P Permissions   ? Help${canBackground ? '   D Background' : ''}   ${exitLabel}`];
+  else lines = [
+    `↑↓ Activity   P Permissions   ? Help   Q Back${canBackground ? '   D Background' : ''}   ${exitLabel}`,
+    'R Allowed roots   C Command rules   T Diagnostics'
+  ];
 
   return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column' },
     ...lines.map((line) => h(Text, { key: line, wrap: 'truncate-end' }, line))
@@ -167,9 +180,9 @@ function RootsScreen({ root, roots, selected, inputMode, buffer }) {
   const all = [root, ...roots];
   return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column', flexGrow: 1 },
     title('ALLOWED ROOTS'),
-    h(Text, { dimColor: true }, 'File tools may access these locations. The current workspace is always primary.'),
+    h(Text, { dimColor: true }, 'Primary root comes from this instance workspace. Additional roots belong only to this instance.'),
     h(Text, null, ''),
-    ...all.map((value, index) => h(Text, { key: `${value}-${index}`, bold: index === selected, wrap: 'truncate-end' }, `${index === selected ? '›' : ' '} ${index === 0 ? '[WORKSPACE] ' : ''}${value}`)),
+    ...all.map((value, index) => h(Text, { key: `${value}-${index}`, bold: index === selected, wrap: 'truncate-end' }, `${index === selected ? '›' : ' '} ${index === 0 ? '[PRIMARY] ' : '[ADDITIONAL] '}${value}`)),
     inputMode === 'root' ? h(Text, null, `\nNew root: ${buffer}█`) : null
   );
 }
@@ -207,15 +220,33 @@ function ToolsScreen({ manifest, manifestState, toolsUrl, auditPath }) {
   );
 }
 
-function HelpScreen() {
+function BackgroundConfirmScreen({ instanceName, root }) {
+  return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column', flexGrow: 1 },
+    title('RUN IN BACKGROUND'),
+    h(Text, null, ''),
+    h(Text, null, 'Keep this workspace connected after returning to the shell?'),
+    h(Text, null, ''),
+    h(Text, null, `Instance   ${instanceName}`),
+    h(Text, { wrap: 'truncate-end' }, `Workspace  ${root}`),
+    h(Text, null, ''),
+    h(Text, { dimColor: true }, 'The same instance ID and workspace settings will be preserved.'),
+    h(Text, { dimColor: true }, 'Use `bdxa attach` to open this dashboard again.'),
+    h(Text, null, ''),
+    h(Text, { dimColor: true }, 'Enter Confirm   Q Back   Ctrl+C Stop')
+  );
+}
+
+function HelpScreen({ attached = false, canBackground = false }) {
+  const exitLabel = attached ? 'Detach dashboard' : 'Stop agent';
   return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column', flexGrow: 1 },
     title('HELP'),
     h(Text, { bold: true }, 'Main'),
     h(Text, null, '  ↑↓       Select recent activity'),
     h(Text, null, '  P        Permissions'),
     h(Text, null, '  ? / H    Help'),
+    canBackground ? h(Text, null, '  D        Run this instance in background') : null,
     h(Text, null, '  Q        Back'),
-    h(Text, null, '  Ctrl+C   Quit'),
+    h(Text, null, `  Ctrl+C   ${exitLabel}`),
     h(Text, null, ''),
     h(Text, { bold: true }, 'Advanced'),
     h(Text, null, '  R        Allowed roots'),
@@ -226,20 +257,22 @@ function HelpScreen() {
     h(Text, null, '  ↑↓       Select decision'),
     h(Text, null, '  Enter    Confirm'),
     h(Text, null, '  Q        Back / deny request'),
-    h(Text, null, '  Ctrl+C   Quit')
+    h(Text, null, `  Ctrl+C   ${exitLabel}`)
   );
 }
-
 async function applyProfile(policyManager, profileKey) {
   const profile = PROFILES[profileKey];
   if (!profile?.categories) return;
   for (const [category, action] of Object.entries(profile.categories)) await policyManager.setCategory(category, action);
 }
 
-export function App({ eventBus, approvalQueue, policyManager, version, root, mode, auditPath, toolManifest, toolManifestState, toolsUrl, onQuit }) {
+export function App({ eventBus, approvalQueue, policyManager, version, root, instanceId, instanceName, mode, auditPath, toolManifest, toolManifestState, toolsUrl, onQuit, onBackground, attached = false }) {
   const { exit } = useApp();
   const layout = useTuiLayout();
-  const [events, setEvents] = useState(eventBus.getHistory());
+  const initialEvents = eventBus.getHistory();
+  const initialConnectionStatus = [...initialEvents].reverse().find((event) => event.type === 'cloud.connection')?.status ?? 'connecting';
+  const [events, setEvents] = useState(initialEvents);
+  const [connectionStatus, setConnectionStatus] = useState(initialConnectionStatus);
   const [pending, setPending] = useState(approvalQueue.getPending());
   const [policy, setPolicy] = useState(policyManager.get());
   const [screen, setScreen] = useState('dashboard');
@@ -250,12 +283,24 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
   const [approvalSelected, setApprovalSelected] = useState(0);
   const [inputMode, setInputMode] = useState(null);
   const [buffer, setBuffer] = useState('');
+  const [backgroundConfirm, setBackgroundConfirm] = useState(false);
   const initialMessage = toolManifestState?.changed
     ? 'MCP tools changed since the previous run. Press T for diagnostics.'
-    : 'Connected. Waiting for requests from ChatGPT...';
+    : initialConnectionStatus === 'connected'
+      ? 'Connected. Waiting for requests from ChatGPT...'
+      : 'Connecting to Buildifyx Cloud...';
   const [message, setMessage] = useState(initialMessage);
 
-  useEffect(() => eventBus.subscribe(() => setEvents(eventBus.getHistory())), [eventBus]);
+  useEffect(() => eventBus.subscribe((event) => {
+    setEvents(eventBus.getHistory());
+    if (event.type !== 'cloud.connection') return;
+    setConnectionStatus(event.status);
+    if (event.status === 'connected') setMessage('Connected. Waiting for requests from ChatGPT...');
+    else if (event.status === 'reconnecting') setMessage(`Connection lost. Reconnecting${event.retryInMs ? ` in ${Math.ceil(event.retryInMs / 1000)}s` : ''}...`);
+    else if (event.status === 'revoked') setMessage('Device access was revoked. This agent is shutting down.');
+    else if (event.status === 'disconnected') setMessage('Disconnected from Buildifyx Cloud.');
+    else if (event.status === 'connecting') setMessage('Connecting to Buildifyx Cloud...');
+  }), [eventBus]);
   useEffect(() => approvalQueue.subscribe((next) => { setPending(next); if (next.length) setApprovalSelected(0); }), [approvalQueue]);
   useEffect(() => policyManager.subscribe((next) => setPolicy({ ...next, categories: { ...next.categories } })), [policyManager]);
 
@@ -284,13 +329,38 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
         setMessage('Request denied.');
       } else if (key.upArrow) {
         setApprovalSelected((value) => Math.max(0, value - 1));
-        setApprovalSelected((value) => Math.max(0, value - 1));
       } else if (key.downArrow) {
         setApprovalSelected((value) => Math.min(choices.length - 1, value + 1));
       } else if (key.return) {
         const choice = choices[Math.min(approvalSelected, choices.length - 1)];
         approvalQueue.resolve(request.id, { action: choice.action, remember: choice.remember });
         setMessage(choice.action === 'deny' ? 'Request denied.' : choice.remember ? `${choice.label}.` : 'Request allowed once.');
+      }
+      return;
+    }
+
+    if (backgroundConfirm) {
+      if (input === 'q' || input === 'Q') {
+        setBackgroundConfirm(false);
+        setMessage('Background handoff cancelled.');
+      } else if (key.return) {
+        if (!onBackground) {
+          setBackgroundConfirm(false);
+          setMessage('Background mode is not available from this dashboard.');
+          return;
+        }
+        setMessage('Moving this workspace to the background...');
+        try {
+          await onBackground();
+          exit();
+        } catch (error) {
+          setBackgroundConfirm(false);
+          setMessage(`Background handoff failed: ${error?.message ?? String(error)}`);
+          if (error?.handoffFatal) {
+            await onQuit();
+            exit();
+          }
+        }
       }
       return;
     }
@@ -316,7 +386,7 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
 
     if (input === 'q' || input === 'Q') {
       if (screen !== 'dashboard') { setScreen('dashboard'); setMessage('Back to dashboard.'); }
-      else setMessage('Ctrl+C quits the agent.');
+      else setMessage(attached ? 'Ctrl+C detaches this dashboard.' : 'Ctrl+C stops the agent.');
       return;
     }
 
@@ -327,7 +397,10 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
       else if (input === 'r' || input === 'R') setScreen('roots');
       else if (input === 'c' || input === 'C') setScreen('commands');
       else if (input === 't' || input === 'T') setScreen('tools');
-      else if (input === '?' || input === 'h' || input === 'H') setScreen('help');
+      else if ((input === 'd' || input === 'D') && !attached && onBackground) {
+        setBackgroundConfirm(true);
+        setMessage('Confirm moving this workspace to the background.');
+      } else if (input === '?' || input === 'h' || input === 'H') setScreen('help');
       return;
     }
 
@@ -379,21 +452,23 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, mod
     }
   });
 
+  const canBackground = !attached && typeof onBackground === 'function';
   let main;
-  if (screen === 'permissions') main = h(PermissionsScreen, { policy, selected: permissionSelected });
+  if (backgroundConfirm) main = h(BackgroundConfirmScreen, { instanceName, root });
+  else if (screen === 'permissions') main = h(PermissionsScreen, { policy, selected: permissionSelected });
   else if (screen === 'roots') main = h(RootsScreen, { root, roots: policy.additionalRoots, selected: rootSelected, inputMode, buffer });
   else if (screen === 'commands') main = h(CommandsScreen, { rules: policy.commandRules, selected: commandSelected, inputMode, buffer });
   else if (screen === 'tools') main = h(ToolsScreen, { manifest: toolManifest, manifestState: toolManifestState, toolsUrl, auditPath });
-  else if (screen === 'help') main = h(HelpScreen);
+  else if (screen === 'help') main = h(HelpScreen, { attached, canBackground });
   else main = h(Box, { flexDirection: layout.narrow ? 'column' : 'row' },
     h(ActivityPanel, { activities, selected: selectedIndex, layout }),
-    h(StatusPanel, { selectedItem, request, approvalSelected, layout })
+    h(StatusPanel, { selectedItem, request, approvalSelected, layout, attached })
   );
 
   return h(Box, { flexDirection: 'column', width: '100%', height: Math.max(16, layout.rows - 1) },
-    h(Header, { version, root, mode, profile, pendingCount: pending.length, layout }),
+    h(Header, { version, root, instanceId, instanceName, mode, profile, pendingCount: pending.length, connectionStatus, layout }),
     main,
-    h(Controls, { screen, inputMode, compact: layout.compact }),
+    h(Controls, { screen, inputMode, compact: layout.compact, attached, canBackground, backgroundConfirm }),
     h(Text, { color: message.startsWith('MCP tools changed') ? 'yellow' : 'cyan', wrap: 'truncate-end' }, message)
   );
 }

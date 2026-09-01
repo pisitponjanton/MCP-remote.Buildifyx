@@ -1,3 +1,4 @@
+import { AgentError, ErrorCode } from './errors.js';
 import { createDispatcher } from './dispatcher.js';
 import { createServices } from '../services/index.js';
 import { createEventBus } from '../events/bus.js';
@@ -40,6 +41,10 @@ export function createRuntime({
     eventBus,
     approvalQueue: activeApprovalQueue,
     services,
-    dispatch
+    dispatch,
+    cancel(requestId, reason = 'Cloud request was cancelled') {
+      if (!activeApprovalQueue) return false;
+      return activeApprovalQueue.cancel(requestId, new AgentError(ErrorCode.REQUEST_CANCELLED, reason));
+    }
   };
 }

@@ -1,6 +1,12 @@
 # Buildifyx Desktop Agent
 
-Buildifyx Desktop Agent (`bdxa`) connects a user-controlled computer to Buildifyx Cloud so ChatGPT can use approved MCP tools on that machine.
+Buildifyx Desktop Agent (`bdxa`) connects one or more local workspaces to Buildifyx Cloud so ChatGPT can use approved MCP tools on the user's computer.
+
+Current package:
+
+```text
+@buildifyx/desktop-agent@0.2.0
+```
 
 Default cloud:
 
@@ -8,17 +14,7 @@ Default cloud:
 https://bdxa.buildifyx.com
 ```
 
-Agent connection:
-
-```text
-wss://bdxa.buildifyx.com/agent
-```
-
-Current package version:
-
-```text
-@buildifyx/desktop-agent@0.1.0
-```
+`bdxa` 0.2 is cloud-only. The previous local MCP HTTP mode has been removed.
 
 ## Install
 
@@ -33,136 +29,202 @@ bdxa --version
 bdxa doctor
 ```
 
-## 1. Login
-
-Ask your Buildifyx administrator for a login token, then run:
+## Sign in
 
 ```bash
 bdxa login
 ```
 
-Paste the token when prompted. Interactive token input is masked so the token is not echoed to the terminal.
-
-If you run `bdxa` before signing in, an interactive terminal will guide you through this sign-in step automatically and then continue connecting the workspace.
-
-For internal automation you can also use:
+The interactive login token is masked while it is entered. For automation:
 
 ```bash
-bdxa login --token "$BUILDFIYX_LOGIN_TOKEN"
+bdxa login --token "$BUILDIFYX_LOGIN_TOKEN"
 ```
 
-Using `--token` directly may expose the token through shell history, so interactive login is preferred.
-
-A successful login registers this computer as a device and stores its device credential locally in:
+Passing a token on the command line can expose it through shell history. A successful login stores the device credential in:
 
 ```text
 ~/.buildifyx/credentials.json
 ```
 
-On macOS and Linux the agent attempts to keep this file readable only by the current user.
+## Start a workspace
 
-Login tokens are intended to be short-lived or one-time credentials. The device credential returned by Buildifyx Cloud is what `bdxa` uses for subsequent cloud connections.
-
-## 2. Check login status
+Foreground mode keeps the TUI attached to the current terminal:
 
 ```bash
-bdxa status
+cd ~/projects/backend
+bdxa --name backend
 ```
 
-The command shows the configured cloud, device ID, account when available, credential expiry, and whether Buildifyx Cloud currently accepts the device credential.
-
-## 3. Connect the device
-
-Run `bdxa` from the directory you want ChatGPT to work in:
+If `--name` is omitted, bdxa uses the workspace folder name. The current directory is the primary allowed root unless `--root` is supplied.
 
 ```bash
-cd ~/projects/my-project
-bdxa
+bdxa --root ~/projects/backend --name backend
 ```
 
-Or choose the workspace explicitly:
+Stop a foreground instance with `Ctrl+C`. To return to the shell without stopping it, press `D` on the Dashboard and confirm with `Enter`. bdxa hands the same instance ID, workspace, and workspace settings to a detached background child; reopen it later with `bdxa attach <name|id>`.
+
+## Background mode
+
+Use `-d` / `--detach` to keep the agent running after the terminal returns:
 
 ```bash
-bdxa --root ~/projects/my-project
+bdxa -d --root ~/projects/frontend --name frontend
+bdxa -d --root ~/projects/backend --name backend
 ```
 
-For advanced command workflows, `--unrestricted-commands` permits arbitrary executable names. It does not bypass the local permission profile and it is not an OS sandbox:
-
-```bash
-bdxa --unrestricted-commands
-```
-
-`--full-access` remains as a legacy alias for `--unrestricted-commands`.
-
-`bdxa` now connects outward to Buildifyx Cloud. The computer does not need to expose a public port for normal cloud operation.
-
-Connection path:
+Each running process receives a unique `instanceId`. Local instance metadata and detached logs are stored under:
 
 ```text
-ChatGPT
-   ↓
-Buildifyx Cloud
-   ↓
-Secure WebSocket
-   ↓
-bdxa
-   ↓
-Local permissions
-   ↓
-Your files and commands
+~/.buildifyx/instances/
 ```
 
-The local agent remains the final permission authority. A cloud request still has to pass the permission policy running on the user's computer before a tool can execute.
+Background instances can still receive requests that require `ASK`. Use `bdxa attach` from another terminal to review them.
 
-## Cloud protocol
+## Manage instances
 
-When the agent connects, it authenticates the WebSocket handshake using the device credential and sends a `device.ready` message containing the agent version, device information, and MCP tool manifest hash.
+List foreground, background, stale, and reconnecting instances:
 
-The cloud can send a tool request such as:
+```bash
+bdxa ls
+```
+
+`bdxa ps` is an alias. In an interactive terminal, `ls` renders a table:
+
+```text
+ID        NAME       WORKSPACE                         MODE        STATUS
+84b01e2c  frontend   /Users/me/projects/frontend       background  online
+21a948af  backend    /Users/me/projects/backend        foreground  online
+```
+
+For scripts, use quiet output:
+
+```bash
+bdxa ls -q
+```
+
+When stdout is redirected or captured by the shell, plain `bdxa ls` automatically switches to full instance IDs only. This makes Docker-style composition work directly:
+
+```bash
+bdxa rm $(bdxa ls)
+bdxa rm -f $(bdxa ls -q)
+```
+
+Inspect one instance by name, full ID, or unique ID prefix:
+
+```bash
+bdxa inspect backend
+```
+
+Open the full dashboard of a running instance:
+
+```bash
+bdxa attach backend
+```
+
+`bdxa attach` mirrors the same Activity, Cloud status, Permissions, Allowed Roots, Command Rules, Diagnostics, and Approval state owned by that running instance. Changes made from the attached dashboard are applied only to that instance's policy. `Ctrl+C` detaches the dashboard without stopping the agent; use `bdxa rm` to stop the instance.
+
+Stop and remove one or more instances:
+
+```bash
+bdxa rm backend
+bdxa rm frontend backend
+```
+
+`bdxa rm` also deletes that instance's local Dashboard policy. A newly created instance always starts from the default Permissions, no additional allowed roots, no custom command rules, and no remembered command/location approvals. Other instances are not changed, even when they use the same workspace root or the same workspace name later.
+
+Remove every local instance and reset each instance's local Dashboard policy:
+
+```bash
+bdxa rm --all
+```
+
+Force-exit through the verified local control channel:
+
+```bash
+bdxa rm -f backend
+```
+`rm` does not blindly signal a PID. Every v0.2 instance exposes a local control endpoint and bdxa verifies the instance ID and PID through that endpoint first. If an old record points at a PID that has been reused by another process, bdxa treats the record as stale and does not kill the unrelated process.
+
+## Multi-workspace behavior
+
+A single signed-in device may run multiple bdxa 0.2 instances simultaneously:
+
+```text
+MacBook
+├─ frontend → instance A
+├─ backend  → instance B
+└─ mobile   → instance C
+```
+
+Each instance has its own workspace root, WebSocket connection, runtime, approval queue, and instance ID. Instances on the same device share only the device credential.
+
+### Instance-specific dashboard settings
+
+Each running instance has its own persisted policy under `~/.buildifyx/instance-settings/<settings-id>/`. The settings identity is derived only from `instanceId`, so two instances never share mutable Dashboard settings even when they use the same workspace root or similar names.
+
+The following settings are instance-specific:
+
+```text
+Permission profile / categories
+Additional allowed roots
+Command rules
+Remembered command/location approvals
+```
+
+A brand-new instance always starts from the default policy; legacy workspace-level or device-level policy is not imported. The same `instanceId` keeps its settings while it remains the same live instance (including foreground → background handoff and `bdxa attach`). When the instance is removed or exits, its instance policy is deleted, so the next instance starts clean.
+
+Because `bdxa attach` talks to the running instance over its verified local control channel, editing Permissions/Roots/Commands from an attached dashboard updates only that selected instance.
+
+Instance names are claimed atomically. If `backend` is already running, another explicitly named `backend` instance is rejected instead of creating an ambiguous target. Automatically generated names can fall back to `backend-2`, `backend-3`, and so on.
+
+## ChatGPT workspace selection
+
+Buildifyx Cloud exposes:
+
+```text
+list_workspaces
+use_workspace
+```
+
+When exactly one workspace is online, Cloud routes requests automatically. When several are online and no target is selected, Cloud returns `WORKSPACE_SELECTION_REQUIRED` rather than guessing or broadcasting.
+
+ChatGPT can call `list_workspaces`, ask the user when necessary, then call `use_workspace` or pass the optional `workspace` argument directly. Once selected, the Cloud MCP session remembers that workspace for subsequent calls in that chat/session.
+
+This allows separate MCP sessions to work independently, for example:
+
+```text
+Chat A → frontend
+Chat B → backend
+```
+
+A Cloud restart clears in-memory MCP session bindings; the client can reconnect and select the workspace again.
+
+## Protocol v2
+
+bdxa 0.2 sends:
 
 ```json
 {
-  "type": "tool.call",
-  "requestId": "req_123",
-  "tool": "read_file",
-  "arguments": {
-    "path": "README.md"
-  }
+  "type": "device.ready",
+  "protocolVersion": 2,
+  "deviceId": "dev_...",
+  "instanceId": "inst_...",
+  "workspace": {
+    "name": "backend",
+    "path": "/Users/me/projects/backend"
+  },
+  "mode": "foreground"
 }
 ```
 
-The agent routes it through the same local runtime and permission system used by local MCP mode.
+Heartbeats and tool results also identify the instance. Cloud tool calls are routed to one specific instance and are never broadcast to every terminal.
 
-Successful requests return:
-
-```json
-{
-  "type": "tool.result",
-  "requestId": "req_123",
-  "result": {}
-}
-```
-
-Failed requests return:
-
-```json
-{
-  "type": "tool.error",
-  "requestId": "req_123",
-  "error": {
-    "code": "PERMISSION_DENIED",
-    "message": "Permission denied"
-  }
-}
-```
-
-The agent also sends heartbeats and reconnects automatically with backoff when the cloud connection drops.
+Buildifyx Cloud 0.2 remains backward-compatible with bdxa 0.1 agents. An agent without `protocolVersion` / `instanceId` is registered as a legacy v1 connection and continues to use the original single-connection behavior.
 
 ## Permissions
 
-The default Auto profile allows normal reads, writes, and approved developer commands while asking before dangerous operations or access outside allowed roots.
-
-Available profiles are:
+The local agent remains the final permission authority. Available profiles are:
 
 ```text
 Auto
@@ -171,56 +233,33 @@ Allow all
 Custom
 ```
 
-The Allow all permission profile skips local ASK prompts for configured tools, dangerous actions, and outside-workspace access. It does not make command execution an operating-system sandbox.
+The default Auto profile permits normal reads, writes, and approved developer commands while asking for dangerous operations or access outside allowed roots.
 
-### ASK requests
+`Allow all` skips local ASK prompts for configured tools, dangerous actions, and outside-workspace access. It is not an operating-system sandbox.
 
-When a rule resolves to `ASK`, the cloud request waits while the TUI displays an approval prompt:
+### Approvals
 
-```text
-APPROVAL REQUIRED
+Foreground TUI requests show the exact action and let the user choose a decision. `Q` denies/goes back and `Ctrl+C` exits bdxa.
 
-docker ps
+Detached instances keep ASK requests pending. `bdxa attach <name|id>` opens the full workspace dashboard, including the normal approval UI, so the request can be resolved without restarting the agent. Cloud request timeouts send `tool.cancel` back to bdxa; a timed-out pending approval is cancelled so approving it later cannot trigger a delayed action.
 
-> Allow once
-  Always allow this request
-  Deny
+### Command executable scope
+
+By default, command execution remains restricted by the local command policy. Advanced users can permit arbitrary executable names with:
+
+```bash
+bdxa --unrestricted-commands
 ```
 
-The tool executes only after local approval.
-
-If the agent is running with `--no-tui`, an ASK request returns a confirmation-required error instead of waiting indefinitely.
-
-### Custom command rules
-
-Command rules match executable name plus argument prefix.
-
-For example:
-
-```text
-docker       ALLOW
-docker ps    ASK
-```
-
-The more specific rule wins, so `docker ps` asks even though the broader `docker` rule allows other Docker commands.
-
-Commands are executed without a shell.
-
-## Allowed roots
-
-The primary root is the directory supplied through `--root`, or the current working directory when omitted.
-
-Additional roots can be managed from the TUI.
-
-Requests outside configured roots follow the `outsideRoot` permission setting and may be allowed, denied, or require approval.
-
-`.git` internals remain protected by the local path security layer.
+`--full-access` remains a legacy alias for this command-scope flag. It does not replace the local permission profile and does not provide OS sandboxing.
 
 ## MCP tools
 
-The current agent exposes:
+Cloud exposes:
 
 ```text
+list_workspaces
+use_workspace
 get_system_info
 list_directory
 read_file
@@ -229,41 +268,27 @@ edit_file
 run_command
 ```
 
-The agent sends its tool count and schema hash to Buildifyx Cloud when connecting so the cloud can detect which tool definition set the device is running.
-
-## TUI controls
-
-Main screen:
-
-```text
-↑↓       Select recent activity
-P        Permissions
-? / H    Help
-Q        Back
-R        Allowed roots (advanced)
-C        Command rules (advanced)
-T        Diagnostics and MCP tools
-Ctrl+C   Quit
-```
-
-Approval screen:
-
-```text
-↑↓       Select decision
-Enter    Confirm
-Q        Deny / Back
-Ctrl+C   Quit
-```
+The local agent executes the machine-facing tools only after the request passes its local permission policy.
 
 ## Audit log
 
-Local activity is recorded at:
+Local activity is appended to:
 
 ```text
 ~/.buildifyx/audit.log
 ```
 
-The audit log records tool names, permission decisions, paths, commands, status, and timing information. Write/edit payload contents are redacted rather than intentionally duplicated into the audit log.
+Events from bdxa 0.2 include instance context containing the instance ID, workspace name, and workspace path so activity from multiple terminals can be distinguished.
+
+## Status
+
+```bash
+bdxa status
+```
+
+Shows device authentication/Cloud reachability and the number of active local instances. Use `bdxa ls` to inspect individual workspaces.
+
+The foreground TUI also follows the real Cloud state and displays connecting, connected, reconnecting, disconnected, or revoked rather than assuming the socket is connected.
 
 ## Logout
 
@@ -271,9 +296,7 @@ The audit log records tool names, permission decisions, paths, commands, status,
 bdxa logout
 ```
 
-The agent asks Buildifyx Cloud to revoke the device credential and then removes the local credential file.
-
-If the cloud cannot be reached, `bdxa` still removes the local credential and reports that remote revocation failed.
+Logout revokes the device credential, so all instances using that credential lose Cloud access and shut down their Cloud connection. Use `Ctrl+C` or `bdxa rm` when the goal is only to stop one workspace.
 
 ## Update
 
@@ -281,66 +304,34 @@ If the cloud cannot be reached, `bdxa` still removes the local credential and re
 bdxa update
 ```
 
-Then restart the agent:
-
-```bash
-bdxa
-```
-
 ## Useful commands
 
 ```bash
 bdxa login
+bdxa --name frontend
+bdxa -d --root ~/projects/backend --name backend
+bdxa ls
+bdxa ls -q
+bdxa attach backend
+bdxa inspect backend
+bdxa rm backend
+bdxa rm frontend backend
+bdxa rm $(bdxa ls)
+bdxa rm --all
 bdxa status
-bdxa --root ~/projects
-bdxa connect --root ~/projects
-bdxa logout
 bdxa doctor
 bdxa update
 bdxa --version
 ```
 
-## Local MCP compatibility mode
-
-For local development or debugging, the previous localhost MCP server remains available explicitly:
-
-```bash
-bdxa local --root ~/projects --port 3333
-```
-
-Normal users should use cloud mode by running `bdxa` without the `local` command.
-
-## Troubleshooting
-
-### `Not logged in`
-
-Run:
-
-```bash
-bdxa login
-```
-
-### `Device credential has expired`
-
-Request a new login token from your administrator and run `bdxa login` again.
-
-### ASK does not execute immediately
-
-This is expected. The request is waiting for a local approval in the TUI.
-
-### Cloud is temporarily unavailable
-
-Leave `bdxa` running. The cloud client automatically retries with exponential backoff.
-
-### Need to inspect the current tools
-
-Press `T` in the TUI to see the current tool count and schema hash.
-
 ## Security notes
 
-- Buildifyx Cloud does not replace the local permission system.
-- Device authentication uses a dedicated device credential, separate from the login token.
-- Command execution uses direct executable invocation rather than shell command strings.
+- Buildifyx Cloud does not bypass the local permission system.
+- Device credentials are separate from login tokens.
+- Each v0.2 process has a separate instance identity and workspace root.
+- Cloud routes each request to one explicit instance; it does not broadcast requests across workspaces.
+- `bdxa rm` verifies a local instance control channel instead of trusting a stale PID record.
+- Local instance metadata and policy files are written with restricted file permissions where supported.
+- Commands execute without a shell unless a supported executable itself starts one.
 - File access is constrained by configured roots and path checks.
-- `--unrestricted-commands` is not an OS sandbox; commands run with the permissions of the operating-system user running `bdxa`.
 - Keep `~/.buildifyx/credentials.json` private.

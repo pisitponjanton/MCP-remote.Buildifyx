@@ -12,14 +12,14 @@ export function createApprovalQueue({ eventBus } = {}) {
   const listeners = new Set();
 
   function notify() {
-    const requests = [...pending.values()].map(({ resolve, ...request }) => request);
+    const requests = [...pending.values()].map(({ resolve, reject, ...request }) => request);
     for (const listener of listeners) listener(requests);
   }
 
   function request(details) {
-    const id = randomUUID();
-    return new Promise((resolve) => {
-      pending.set(id, { id, createdAt: new Date().toISOString(), ...details, resolve });
+    const id = details.id ?? randomUUID();
+    return new Promise((resolve, reject) => {
+      pending.set(id, { id, createdAt: new Date().toISOString(), ...details, resolve, reject });
       eventBus?.emit('permission.requested', { requestId: id, ...auditSafeDetails(details) });
       notify();
     });
@@ -35,10 +35,21 @@ export function createApprovalQueue({ eventBus } = {}) {
     return true;
   }
 
+  function cancelRequest(id, error) {
+    const item = pending.get(id);
+    if (!item) return false;
+    pending.delete(id);
+    item.reject(error);
+    eventBus?.emit('permission.cancelled', { requestId: id, reason: error?.message ?? String(error) });
+    notify();
+    return true;
+  }
+
   return {
     request,
     resolve: resolveRequest,
-    getPending: () => [...pending.values()].map(({ resolve, ...request }) => request),
+    cancel: cancelRequest,
+    getPending: () => [...pending.values()].map(({ resolve, reject, ...request }) => request),
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

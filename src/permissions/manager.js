@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { normalizePolicy } from './policy.js';
-import { savePolicy } from './store.js';
+import { updatePolicy } from './store.js';
 
 export function createPolicyManager(initialPolicy, { filePath } = {}) {
   let policy = normalizePolicy(initialPolicy);
@@ -10,8 +10,9 @@ export function createPolicyManager(initialPolicy, { filePath } = {}) {
     for (const listener of listeners) listener(policy);
   }
 
-  async function persist() {
-    policy = await savePolicy(policy, filePath);
+  async function mutate(updater) {
+    if (filePath) policy = await updatePolicy(filePath, updater, policy);
+    else policy = normalizePolicy(await updater(policy));
     notify();
     return policy;
   }
@@ -23,8 +24,10 @@ export function createPolicyManager(initialPolicy, { filePath } = {}) {
       return () => listeners.delete(listener);
     },
     async setCategory(category, action) {
-      policy = normalizePolicy({ ...policy, categories: { ...policy.categories, [category]: action } });
-      return persist();
+      return mutate((current) => normalizePolicy({
+        ...current,
+        categories: { ...current.categories, [category]: action }
+      }));
     },
     async addCommandRule(rule) {
       const normalized = {
@@ -32,26 +35,38 @@ export function createPolicyManager(initialPolicy, { filePath } = {}) {
         argsPrefix: Array.isArray(rule.argsPrefix) ? rule.argsPrefix : [],
         action: rule.action ?? 'ask'
       };
-      const commandRules = policy.commandRules.filter((item) =>
-        !(item.executable === normalized.executable && JSON.stringify(item.argsPrefix ?? []) === JSON.stringify(normalized.argsPrefix))
-      );
-      commandRules.push(normalized);
-      policy = normalizePolicy({ ...policy, commandRules });
-      return persist();
+      return mutate((current) => {
+        const commandRules = current.commandRules.filter((item) =>
+          !(item.executable === normalized.executable && JSON.stringify(item.argsPrefix ?? []) === JSON.stringify(normalized.argsPrefix))
+        );
+        commandRules.push(normalized);
+        return normalizePolicy({ ...current, commandRules });
+      });
     },
     async removeCommandRule(index) {
-      policy = normalizePolicy({ ...policy, commandRules: policy.commandRules.filter((_, current) => current !== index) });
-      return persist();
+      const target = policy.commandRules[index];
+      if (!target) return policy;
+      return mutate((current) => normalizePolicy({
+        ...current,
+        commandRules: current.commandRules.filter((item) =>
+          !(item.executable === target.executable && JSON.stringify(item.argsPrefix ?? []) === JSON.stringify(target.argsPrefix ?? []))
+        )
+      }));
     },
     async addRoot(root) {
       const absolute = path.resolve(root);
-      const additionalRoots = [...new Set([...policy.additionalRoots, absolute])];
-      policy = normalizePolicy({ ...policy, additionalRoots });
-      return persist();
+      return mutate((current) => normalizePolicy({
+        ...current,
+        additionalRoots: [...new Set([...current.additionalRoots, absolute])]
+      }));
     },
     async removeRoot(index) {
-      policy = normalizePolicy({ ...policy, additionalRoots: policy.additionalRoots.filter((_, current) => current !== index) });
-      return persist();
+      const target = policy.additionalRoots[index];
+      if (!target) return policy;
+      return mutate((current) => normalizePolicy({
+        ...current,
+        additionalRoots: current.additionalRoots.filter((item) => item !== target)
+      }));
     }
   };
 }

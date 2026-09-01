@@ -2,9 +2,9 @@ import { printHelp } from './help.js';
 import { parseInvocation } from './options.js';
 import { runCloud } from './commands/cloud.js';
 import { runDoctor } from './commands/doctor.js';
+import { runInstanceAttach, runInstanceInspect, runInstanceList, runInstanceRemove } from './commands/instances.js';
 import { runLogin } from './commands/login.js';
 import { runLogout } from './commands/logout.js';
-import { runRemote } from './commands/remote.js';
 import { runStatus } from './commands/status.js';
 import { runUpdate } from './commands/update.js';
 import { getPackageMetadata } from '../version.js';
@@ -39,12 +39,23 @@ export async function runCli(argv = process.argv.slice(2)) {
     case 'status':
       await runStatus();
       return;
-    case 'local':
-      await runRemote(args);
+    case 'ls':
+    case 'ps':
+      await runInstanceList(args);
       return;
+    case 'inspect':
+      await runInstanceInspect(args);
+      return;
+    case 'attach':
+      await runInstanceAttach(args);
+      return;
+    case 'rm':
+      await runInstanceRemove(args);
+      return;
+    case 'local':
     case 'remote':
     case 'r':
-      throw new Error('`bdxa remote` has been removed. Use `bdxa` for Buildifyx Cloud or `bdxa local` for local development.');
+      throw new Error('Local MCP mode has been removed in bdxa 0.2.0. Run `bdxa` to connect through Buildifyx Cloud.');
     case 'doctor':
     case 'd':
       await runDoctor(args);

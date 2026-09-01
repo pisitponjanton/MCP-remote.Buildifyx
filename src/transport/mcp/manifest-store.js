@@ -2,8 +2,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-export function defaultToolManifestPath() {
-  return path.join(os.homedir(), '.buildifyx', 'tool-manifest.json');
+export function defaultToolManifestPath(scope = 'default') {
+  const suffix = scope === 'default' ? '' : `-${scope}`;
+  return path.join(os.homedir(), '.buildifyx', `tool-manifest${suffix}.json`);
 }
 
 export async function loadPreviousToolManifest(filePath = defaultToolManifestPath()) {

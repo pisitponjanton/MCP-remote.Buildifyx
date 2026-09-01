@@ -13,8 +13,8 @@ export function createDispatcher({ services, authorize, eventBus }) {
     throw new AgentError(ErrorCode.INTERNAL_ERROR, 'services are required');
   }
 
-  return async function dispatch(toolName, input = {}) {
-    const requestId = randomUUID();
+  return async function dispatch(toolName, input = {}, options = {}) {
+    const requestId = options.requestId ?? randomUUID();
     const startedAt = Date.now();
     const handler = services[toolName];
 

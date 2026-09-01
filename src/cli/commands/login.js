@@ -79,7 +79,13 @@ export async function runLogin(args, { showConnectHint = true } = {}) {
 
   const deviceToken = response?.credential?.token ?? response?.deviceToken;
   const deviceId = response?.device?.id ?? response?.deviceId;
-  const expiresAt = response?.credential?.expiresAt ?? response?.expiresAt ?? null;
+  const deviceExpiresAt = response?.credential?.expiresAt ?? response?.expiresAt ?? null;
+  const loginTokenName = response?.loginToken?.name ?? null;
+  const loginTokenPrefix = response?.loginToken?.prefix ?? token.slice(0, 18);
+  const loginTokenExpiresAt = response?.loginToken && Object.prototype.hasOwnProperty.call(response.loginToken, 'expiresAt')
+    ? response.loginToken.expiresAt
+    : undefined;
+
   if (!deviceToken || !deviceId) throw new Error('Cloud login response did not include a device credential.');
 
   await saveCredentials({
@@ -88,13 +94,20 @@ export async function runLogin(args, { showConnectHint = true } = {}) {
     deviceName: response?.device?.name ?? os.hostname(),
     account: response?.user?.email ?? response?.account ?? null,
     deviceToken,
-    expiresAt,
+    expiresAt: deviceExpiresAt,
+    loginTokenName,
+    loginTokenPrefix,
+    ...(loginTokenExpiresAt !== undefined ? { loginTokenExpiresAt } : {}),
     createdAt: new Date().toISOString()
   });
 
   console.log('✓ Signed in successfully');
-  console.log(`  Device   ${response?.device?.name ?? os.hostname()}`);
-  if (response?.user?.email) console.log(`  Account  ${response.user.email}`);
-  if (expiresAt) console.log(`  Expires  ${expiresAt}`);
+  console.log(`  Device          ${response?.device?.name ?? os.hostname()}`);
+  if (response?.user?.email) console.log(`  Account         ${response.user.email}`);
+  console.log(`  Login token     ${loginTokenPrefix}••••`);
+  if (loginTokenName) console.log(`  Token name      ${loginTokenName}`);
+  console.log(`  Login expires   ${loginTokenExpiresAt === null ? 'Never' : loginTokenExpiresAt ?? 'Unknown'}`);
+  console.log(`  Device token    ${deviceToken.slice(0, 18)}••••`);
+  console.log(`  Device expires  ${deviceExpiresAt ?? 'Unknown'}`);
   if (showConnectHint) console.log('\nRun `bdxa` inside the workspace you want ChatGPT to use.');
 }
