@@ -183,7 +183,7 @@ test('outside-root permission cannot bypass a denied write operation', async () 
   });
 });
 
-test('outside-root and dangerous command permissions require separate approvals', async () => {
+test('outside-root and dangerous command permissions require distinct approvals', async () => {
   await withTemp(async (base) => {
     const root = path.join(base, 'root');
     const outside = path.join(base, 'outside');
@@ -192,14 +192,21 @@ test('outside-root and dangerous command permissions require separate approvals'
       categories: { outsideRoot: 'ask', dangerous: 'ask' }
     }), { filePath: path.join(base, 'policy.json') });
     const runtime = createRuntime({ root, policyManager, interactive: true });
+    const requestId = 'req_two_permission_gates';
 
-    const execution = runtime.dispatch('run_command', { command: 'git', args: ['--version'], cwd: outside });
+    const execution = runtime.dispatch('run_command', { command: 'git', args: ['--version'], cwd: outside }, { requestId });
     const scopeRequest = await waitForPending(runtime.approvalQueue);
     assert.equal(scopeRequest.category, 'outsideRoot');
+    assert.equal(scopeRequest.requestId, requestId);
+    assert.notEqual(scopeRequest.id, requestId);
     runtime.approvalQueue.resolve(scopeRequest.id, { action: 'allow', remember: null });
 
     const commandRequest = await waitForPending(runtime.approvalQueue);
     assert.equal(commandRequest.category, 'dangerous');
+    assert.equal(commandRequest.requestId, requestId);
+    assert.notEqual(commandRequest.id, scopeRequest.id);
+    assert.equal(runtime.approvalQueue.resolve(scopeRequest.id, { action: 'allow', remember: null }), false);
+    assert.equal(runtime.approvalQueue.getPending()[0].id, commandRequest.id);
     runtime.approvalQueue.resolve(commandRequest.id, { action: 'allow', remember: null });
 
     const result = await execution;
@@ -207,7 +214,6 @@ test('outside-root and dangerous command permissions require separate approvals'
     assert.match(result.stdout, /git version/i);
   });
 });
-
 test('outside-root approval does not unlock an arbitrary executable', async () => {
   await withTemp(async (base) => {
     const root = path.join(base, 'root');

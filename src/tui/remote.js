@@ -56,16 +56,17 @@ export function createRemoteDashboardState(instance, initialDashboard, { request
       if (!response.dashboard) throw new Error('Instance dashboard snapshot is unavailable.');
       let next = response.dashboard;
       if (controlDisconnected) {
+        const timestamp = now();
         next = {
           ...next,
           events: [
             ...(next.events ?? []),
             {
-              id: `remote-reconnected-${Date.now()}`,
-              type: 'cloud.connection',
-              timestamp: new Date().toISOString(),
-              status: next.connection?.status ?? 'connected',
-              localControlRecovered: true
+              id: `local-control-connected-${timestamp}`,
+              type: 'local.control',
+              timestamp: new Date(timestamp).toISOString(),
+              status: 'connected',
+              cloudStatus: next.connection?.status ?? null
             }
           ]
         };
@@ -77,14 +78,15 @@ export function createRemoteDashboardState(instance, initialDashboard, { request
       retryAfter = now() + retryDelayMs;
       if (!controlDisconnected) {
         const previousEvents = dashboard.events;
+        const timestamp = now();
         dashboard = {
           ...dashboard,
           events: [
             ...(dashboard.events ?? []),
             {
-              id: `remote-disconnected-${Date.now()}`,
-              type: 'cloud.connection',
-              timestamp: new Date().toISOString(),
+              id: `local-control-disconnected-${timestamp}`,
+              type: 'local.control',
+              timestamp: new Date(timestamp).toISOString(),
               status: 'disconnected',
               lastError: 'Local instance control channel disconnected.'
             }
@@ -120,9 +122,10 @@ export function createRemoteDashboardState(instance, initialDashboard, { request
       approvalListeners.add(listener);
       return () => approvalListeners.delete(listener);
     },
-    resolve(requestId, decision) {
+    resolve(approvalId, decision) {
       void rpc('approval.resolve', {
-        requestId,
+        approvalId,
+        requestId: approvalId,
         action: decision.action,
         remember: decision.remember ?? null
       }).then(() => refresh()).catch(() => refresh());

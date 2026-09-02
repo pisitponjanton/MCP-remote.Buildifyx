@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -25,6 +25,7 @@ test('audit and instance logs are private to the local user', { skip: process.pl
     eventBus.emit('test.event', { value: true });
     const auditStat = await waitForFile(auditPath);
     audit.stop();
+    await audit.flush();
     assert.equal(auditStat.mode & 0o777, 0o600);
 
     const instancesDir = path.join(root, 'instances');
@@ -32,6 +33,25 @@ test('audit and instance logs are private to the local user', { skip: process.pl
     await handle.close();
     const logStat = await stat(filePath);
     assert.equal(logStat.mode & 0o777, 0o600);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('audit flush waits for queued events before shutdown completes', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'bdxa-audit-flush-'));
+  try {
+    const eventBus = createEventBus();
+    const auditPath = path.join(root, 'audit.log');
+    const audit = createAuditLogger({ eventBus, filePath: auditPath });
+    audit.start();
+    for (let index = 0; index < 25; index += 1) eventBus.emit('flush.event', { index });
+    audit.stop();
+    await audit.flush();
+
+    const records = (await readFile(auditPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(records.length, 25);
+    assert.equal(records.at(-1).index, 24);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

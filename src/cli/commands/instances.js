@@ -128,10 +128,35 @@ async function waitUntilLive(identifier, expectedPid, timeoutMs = 8000) {
   throw new Error(`Restarted instance "${identifier}" did not become ready in time.`);
 }
 
-
 function restartReadyTimeoutMs() {
   const configured = Number(process.env.BUILDFYX_RESTART_READY_TIMEOUT_MS);
   return Number.isFinite(configured) && configured >= 100 && configured <= 30_000 ? configured : 8000;
+}
+
+function waitForChildExit(child, timeoutMs) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off('exit', onExit);
+      resolve(value);
+    };
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    child.once('exit', onExit);
+  });
+}
+
+async function ensureChildExited(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  if (await waitForChildExit(child, 300)) return;
+  try { child.kill('SIGTERM'); } catch {}
+  if (await waitForChildExit(child, 1500)) return;
+  try { child.kill('SIGKILL'); } catch {}
+  await waitForChildExit(child, 500);
 }
 
 function dashboardHasActiveWork(dashboard) {
@@ -185,7 +210,7 @@ async function restartBackgroundInstance(instance) {
   });
 
   const preserveFailure = async (error) => {
-    await saveInstance(restartRecord('restart_failed', error?.message ?? String(error), child?.pid ?? 0)).catch(() => undefined);
+    await saveInstance(restartRecord('restart_failed', error?.message ?? String(error), 0)).catch(() => undefined);
     await releaseInstanceName(instance.name, instance.instanceId).catch(() => undefined);
   };
 
@@ -196,13 +221,13 @@ async function restartBackgroundInstance(instance) {
     logPath = opened.filePath;
     handle = opened.handle;
     await saveInstance(restartRecord('starting'));
-
     const childArgs = [
       script,
       '--root', instance.workspace,
       '--instance-id', instance.instanceId,
       '--instance-name', instance.name,
-      '--background-child'
+      '--background-child',
+      '--restart-child'
     ];
     if (unrestrictedCommands) childArgs.push('--unrestricted-commands');
 
@@ -216,6 +241,7 @@ async function restartBackgroundInstance(instance) {
     child.unref();
   } catch (error) {
     await handle?.close().catch(() => undefined);
+    await ensureChildExited(child);
     await preserveFailure(error);
     throw new Error(`Restart failed after stopping "${instance.name}": ${error.message}. The instance record and policy were preserved for inspection and cleanup.`);
   }
@@ -225,7 +251,7 @@ async function restartBackgroundInstance(instance) {
   try {
     return await waitUntilLive(instance.instanceId, child.pid, restartReadyTimeoutMs());
   } catch (error) {
-    try { child.kill('SIGTERM'); } catch {}
+    await ensureChildExited(child);
     await preserveFailure(error);
     throw new Error(`${error.message} The instance record and policy were preserved for inspection and cleanup.`);
   }

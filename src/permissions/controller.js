@@ -72,7 +72,7 @@ export function createPermissionController({ root, policyManager, approvalQueue,
       }
 
       const decision = await approvalQueue.request({
-        id: requestId,
+        requestId,
         toolName,
         input,
         description: describeRequest(toolName, input),

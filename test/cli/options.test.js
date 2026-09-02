@@ -12,6 +12,10 @@ test('bdxa defaults to cloud mode', () => {
     command: 'cloud',
     args: ['--handoff-child', '--instance-id', 'inst_test']
   });
+  assert.deepEqual(parseInvocation(['--restart-child', '--instance-id', 'inst_test']), {
+    command: 'cloud',
+    args: ['--restart-child', '--instance-id', 'inst_test']
+  });
 });
 
 test('instance management commands preserve docker-style arguments', () => {

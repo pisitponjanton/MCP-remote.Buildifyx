@@ -27,54 +27,91 @@ export function createApprovalQueue({ eventBus } = {}) {
     for (const listener of listeners) listener(requests);
   }
 
-  function rememberCancellation(id, error) {
-    cancelled.set(id, error);
+  function rememberCancellation(requestId, error) {
+    if (!requestId) return;
+    cancelled.set(requestId, error);
     while (cancelled.size > 500) cancelled.delete(cancelled.keys().next().value);
   }
 
   function request(details) {
-    const id = details.id ?? randomUUID();
-    const cancellation = cancelled.get(id);
+    const requestId = details.requestId ?? details.id ?? randomUUID();
+    const approvalId = details.id ?? `appr_${randomUUID()}`;
+    const cancellation = cancelled.get(requestId);
     if (cancellation) {
-      cancelled.delete(id);
+      cancelled.delete(requestId);
       return Promise.reject(cancellation);
     }
 
     return new Promise((resolve, reject) => {
-      pending.set(id, { id, createdAt: new Date().toISOString(), ...details, resolve, reject });
-      eventBus?.emit('permission.requested', { requestId: id, ...auditSafeDetails(details) });
+      const { id: _ignoredId, ...rest } = details;
+      pending.set(approvalId, {
+        id: approvalId,
+        requestId,
+        createdAt: new Date().toISOString(),
+        ...rest,
+        resolve,
+        reject
+      });
+      eventBus?.emit('permission.requested', {
+        requestId,
+        approvalId,
+        ...auditSafeDetails(rest)
+      });
       notify();
     });
   }
 
-  function resolveRequest(id, decision) {
-    const item = pending.get(id);
+  function resolveRequest(approvalId, decision) {
+    const item = pending.get(approvalId);
     if (!item) return false;
-    pending.delete(id);
+    pending.delete(approvalId);
     item.resolve(decision);
-    eventBus?.emit('permission.resolved', { requestId: id, ...decision });
+    eventBus?.emit('permission.resolved', {
+      requestId: item.requestId,
+      approvalId,
+      ...decision
+    });
     notify();
     return true;
   }
 
-  function cancelRequest(id, error) {
-    const item = pending.get(id);
-    if (!item) {
-      rememberCancellation(id, error);
-      eventBus?.emit('permission.cancelled', { requestId: id, reason: error?.message ?? String(error), pending: false });
-      return true;
+  function cancelRequest(requestId, error) {
+    rememberCancellation(requestId, error);
+    let cancelledCount = 0;
+    for (const [approvalId, item] of pending.entries()) {
+      if (item.requestId !== requestId && approvalId !== requestId) continue;
+      pending.delete(approvalId);
+      item.reject(error);
+      cancelledCount += 1;
+      eventBus?.emit('permission.cancelled', {
+        requestId: item.requestId,
+        approvalId,
+        reason: error?.message ?? String(error),
+        pending: true
+      });
     }
-    pending.delete(id);
-    item.reject(error);
-    eventBus?.emit('permission.cancelled', { requestId: id, reason: error?.message ?? String(error), pending: true });
+    if (cancelledCount === 0) {
+      eventBus?.emit('permission.cancelled', {
+        requestId,
+        reason: error?.message ?? String(error),
+        pending: false
+      });
+    }
     notify();
     return true;
+  }
+
+  function cancelAll(error) {
+    const requestIds = [...new Set([...pending.values()].map((item) => item.requestId))];
+    for (const requestId of requestIds) cancelRequest(requestId, error);
+    return requestIds.length > 0;
   }
 
   return {
     request,
     resolve: resolveRequest,
     cancel: cancelRequest,
+    cancelAll,
     getPending: () => [...pending.values()].map(({ resolve, reject, ...request }) => request),
     subscribe(listener) {
       listeners.add(listener);

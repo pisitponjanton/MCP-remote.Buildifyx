@@ -21,7 +21,7 @@ function summarizeInput(toolName, input = {}) {
   return summary;
 }
 
-export function createDispatcher({ services, authorize, eventBus }) {
+export function createDispatcher({ services, authorize, eventBus, requestLifecycle = null }) {
   if (!services || typeof services !== 'object') {
     throw new AgentError(ErrorCode.INTERNAL_ERROR, 'services are required');
   }
@@ -31,24 +31,43 @@ export function createDispatcher({ services, authorize, eventBus }) {
     const startedAt = Date.now();
     const handler = services[toolName];
 
+    if (typeof handler !== 'function') {
+      const error = new AgentError(ErrorCode.TOOL_NOT_FOUND, `Unknown tool: ${toolName}`, { toolName });
+      eventBus?.emit('tool.started', { requestId, tool: toolName, input: summarizeInput(toolName, input) });
+      eventBus?.emit('tool.failed', { requestId, tool: toolName, durationMs: Date.now() - startedAt, error: { code: error.code, message: error.message } });
+      throw error;
+    }
+
+    let requestContext = null;
+    try {
+      requestContext = requestLifecycle?.begin?.(requestId) ?? {};
+    } catch (error) {
+      const normalized = normalizeError(error);
+      eventBus?.emit('tool.rejected', {
+        requestId,
+        tool: toolName,
+        error: { code: normalized.code, message: normalized.message }
+      });
+      throw normalized;
+    }
+
     eventBus?.emit('tool.started', {
       requestId,
       tool: toolName,
       input: summarizeInput(toolName, input)
     });
 
-    if (typeof handler !== 'function') {
-      const error = new AgentError(ErrorCode.TOOL_NOT_FOUND, `Unknown tool: ${toolName}`, { toolName });
-      eventBus?.emit('tool.failed', { requestId, tool: toolName, durationMs: Date.now() - startedAt, error: { code: error.code, message: error.message } });
-      throw error;
-    }
-
+    let outcome = 'completed';
     try {
+      requestContext.throwIfCancelled?.();
       const context = authorize ? await authorize(toolName, input, requestId) : {};
-      const result = await handler(input, { ...context, requestId, eventBus });
+      requestContext.throwIfCancelled?.();
+      const result = await handler(input, { ...context, ...requestContext, requestId, eventBus });
+      requestContext.throwIfCancelled?.();
       eventBus?.emit('tool.completed', { requestId, tool: toolName, durationMs: Date.now() - startedAt });
       return result;
     } catch (error) {
+      outcome = 'failed';
       const normalized = normalizeError(error);
       eventBus?.emit('tool.failed', {
         requestId,
@@ -57,6 +76,8 @@ export function createDispatcher({ services, authorize, eventBus }) {
         error: { code: normalized.code, message: normalized.message }
       });
       throw normalized;
+    } finally {
+      requestLifecycle?.end?.(requestId, requestContext, outcome);
     }
   };
 }

@@ -58,6 +58,7 @@ async function ensureCredentials() {
 function approvalForDashboard(request) {
   return {
     id: request.id,
+    requestId: request.requestId,
     createdAt: request.createdAt,
     toolName: request.toolName,
     description: request.description,
@@ -234,6 +235,7 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
   const unrestrictedCommands = hasFlag(args, '--unrestricted-commands') || hasFlag(args, '--full-access');
   const backgroundChild = hasFlag(args, '--background-child');
   const handoffChild = hasFlag(args, '--handoff-child');
+  const restartChild = hasFlag(args, '--restart-child');
   const detach = hasFlag(args, '-d') || hasFlag(args, '--detach');
   const metadata = suppliedMetadata ?? await getPackageMetadata();
   const suppliedInstanceId = getOption(args, '--instance-id', null);
@@ -305,14 +307,16 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
   let unsubscribeCloud = () => {};
   let onSignal = null;
   let registryUpdate = Promise.resolve();
-
   const shutdown = async () => {
     if (closing) return;
     closing = true;
     unsubscribeCloud();
-    audit.stop();
+    const runtimeStopping = runtime.stop?.('Agent is shutting down');
     await registryUpdate.catch(() => undefined);
+    await runtimeStopping;
     await cloud.stop();
+    audit.stop();
+    await audit.flush?.();
     if (control) await control.close().catch(() => undefined);
     control = null;
     if (!handedOff) {
@@ -326,6 +330,26 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
     process.exit(code);
   };
 
+  const forceShutdownAndExit = async () => {
+    if (closing) {
+      process.exit(1);
+      return;
+    }
+    closing = true;
+    unsubscribeCloud();
+    const runtimeStopping = runtime.stop?.('Agent was force-stopped', { force: true });
+    await registryUpdate.catch(() => undefined);
+    await runtimeStopping?.catch(() => undefined);
+    audit.stop();
+    await audit.flush?.().catch(() => undefined);
+    if (control) await control.close().catch(() => undefined);
+    control = null;
+    if (!handedOff) {
+      await removeInstanceRecord(instanceId).catch(() => undefined);
+      await releaseInstanceName(name, instanceId).catch(() => undefined);
+    }
+    process.exit(1);
+  };
   const dashboardSnapshot = () => ({
     version: metadata.version,
     updateStatus,
@@ -349,11 +373,14 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
     if (message.command === 'approval.list') return { approvals: dashboardSnapshot().approvals };
     if (message.command === 'approval.resolve') {
       const action = message.action === 'allow' ? 'allow' : message.action === 'deny' ? 'deny' : null;
-      if (!action || typeof message.requestId !== 'string') throw new Error('Invalid approval decision.');
+      const approvalId = typeof message.approvalId === 'string'
+        ? message.approvalId
+        : typeof message.requestId === 'string' ? message.requestId : null;
+      if (!action || !approvalId) throw new Error('Invalid approval decision.');
       const remember = ['command', 'root'].includes(message.remember) ? message.remember : null;
-      const resolved = runtime.approvalQueue?.resolve(message.requestId, { action, remember }) ?? false;
+      const resolved = runtime.approvalQueue?.resolve(approvalId, { action, remember }) ?? false;
       if (!resolved) throw new Error('Approval request is no longer pending.');
-      return { resolved: true, requestId: message.requestId };
+      return { resolved: true, approvalId };
     }
     if (message.command === 'policy.setCategory') {
       if (!POLICY_CATEGORIES.has(message.category) || !POLICY_ACTIONS.has(message.action)) throw new Error('Invalid permission category or action.');
@@ -399,6 +426,7 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
         logPath: previousRecord?.logPath ?? null
       },
       onShutdown: () => shutdownAndExit(0),
+      onForce: () => forceShutdownAndExit(),
       onCommand: handleControlCommand
     });
     await updateInstance(instanceId, { controlPath: control.endpoint });
@@ -407,8 +435,10 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
     await startControl();
   } catch (error) {
     audit.stop();
-    if (handoffChild && suppliedInstanceId) {
-      await updateInstance(instanceId, { status: 'handoff_failed', lastError: error?.message ?? String(error) }).catch(() => undefined);
+    await audit.flush?.().catch(() => undefined);
+    if ((handoffChild || restartChild) && suppliedInstanceId) {
+      const failureStatus = restartChild ? 'restart_child_failed' : 'handoff_failed';
+      await updateInstance(instanceId, { status: failureStatus, lastError: error?.message ?? String(error) }).catch(() => undefined);
     } else {
       await resetInstancePolicy(instanceId).catch(() => undefined);
       await removeInstanceRecord(instanceId);
@@ -450,10 +480,14 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
 
       const activated = await prepared.activate();
       handedOff = true;
-      unsubscribeCloud();
-      audit.stop();
-      await cloud.stop();
       closing = true;
+      unsubscribeCloud();
+      const runtimeStopping = runtime.stop?.('Agent moved to the background');
+      await registryUpdate.catch(() => undefined);
+      await runtimeStopping;
+      await cloud.stop();
+      audit.stop();
+      await audit.flush?.();
       if (onSignal) {
         process.removeListener('SIGINT', onSignal);
         process.removeListener('SIGTERM', onSignal);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -52,5 +52,18 @@ test('UTF-8 and atomic writes enforce size and preserve permissions', async () =
     await assert.rejects(writeUtf8FileAtomic(file, 'x'.repeat(MAX_TEXT_FILE_BYTES + 1)), /exceeds/);
     await writeFile(path.join(root, 'binary.dat'), Buffer.from([0xff, 0xfe]));
     await assert.rejects(readUtf8File(path.join(root, 'binary.dat')), /not valid UTF-8/);
+  });
+});
+
+test('atomic edits can abort at the commit point without changing the target', async () => {
+  await withTemp(async (root) => {
+    const file = path.join(root, 'commit.txt');
+    await writeFile(file, 'before');
+    await assert.rejects(
+      writeUtf8FileAtomic(file, 'after', { beforeCommit: () => { throw new Error('cancel before commit'); } }),
+      /cancel before commit/
+    );
+    assert.equal(await readFile(file, 'utf8'), 'before');
+    assert.equal((await readdir(root)).some((name) => name.includes('.buildifyx-') && name.endsWith('.tmp')), false);
   });
 });

@@ -30,10 +30,13 @@ export function createFileServices({ root }) {
   return {
     async list_directory(input = {}, context = {}) {
       const target = await existingTarget(root, input, context);
+      context.throwIfCancelled?.();
       const targetStat = await stat(target);
       if (!targetStat.isDirectory()) throw new Error('The requested path is not a directory.');
+      context.throwIfCancelled?.();
 
       const dirents = await readdir(target, { withFileTypes: true });
+      context.throwIfCancelled?.();
       const limit = input.limit ?? 200;
       const entries = dirents.slice(0, limit).map((entry) => ({
         name: entry.name,
@@ -54,7 +57,9 @@ export function createFileServices({ root }) {
 
     async read_file(input, context = {}) {
       const target = await existingTarget(root, input, context);
+      context.throwIfCancelled?.();
       const content = await readUtf8File(target);
+      context.throwIfCancelled?.();
       context.eventBus?.emit('resource.accessed', { requestId: context.requestId, resourceType: 'file', operation: 'read', path: target });
       return {
         path: displayPath(root, target),
@@ -67,7 +72,8 @@ export function createFileServices({ root }) {
 
     async write_file(input, context = {}) {
       const target = await newTarget(root, input, context);
-      await createUtf8File(target, input.content);
+      context.throwIfCancelled?.();
+      await createUtf8File(target, input.content, { beforeCommit: () => context.commitSideEffect?.() });
       context.eventBus?.emit('resource.accessed', { requestId: context.requestId, resourceType: 'file', operation: 'create', path: target });
       return {
         path: displayPath(root, target),
@@ -80,7 +86,9 @@ export function createFileServices({ root }) {
 
     async edit_file(input, context = {}) {
       const target = await existingTarget(root, input, context);
+      context.throwIfCancelled?.();
       const previousContent = await readUtf8File(target);
+      context.throwIfCancelled?.();
       let nextContent;
       switch (input.operation) {
         case 'overwrite': nextContent = input.content; break;
@@ -89,7 +97,10 @@ export function createFileServices({ root }) {
         default: throw new Error(`Unsupported edit operation: ${input.operation}`);
       }
       const changed = nextContent !== previousContent;
-      if (changed) await writeUtf8FileAtomic(target, nextContent);
+      if (changed) {
+        context.throwIfCancelled?.();
+        await writeUtf8FileAtomic(target, nextContent, { beforeCommit: () => context.commitSideEffect?.() });
+      }
       context.eventBus?.emit('resource.accessed', { requestId: context.requestId, resourceType: 'file', operation: 'write', path: target, changed });
       return {
         path: displayPath(root, target),

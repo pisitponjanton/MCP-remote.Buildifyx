@@ -24,7 +24,7 @@ export function parseInvocation(argv) {
   const first = argv[0];
   const cloudFlags = new Set([
     '--root', '--name', '-d', '--detach', '--unrestricted-commands', '--full-access', '--no-tui',
-    '--background-child', '--handoff-child', '--instance-id', '--instance-name'
+    '--background-child', '--handoff-child', '--restart-child', '--instance-id', '--instance-name'
   ]);
   if (!first || cloudFlags.has(first)) return { command: 'cloud', args: argv };
   return { command: first, args: argv.slice(1) };

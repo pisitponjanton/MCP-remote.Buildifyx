@@ -27,7 +27,7 @@ test('attached dashboard retries after a transient local control failure', async
   const request = async () => {
     calls += 1;
     if (calls === 1) throw new Error('temporary control failure');
-    return { ok: true, dashboard: dashboard('connected') };
+    return { ok: true, dashboard: dashboard('reconnecting') };
   };
   const remote = createRemoteDashboardState(
     { instanceId: 'inst_remote_test', controlPath: '/tmp/not-used.sock' },
@@ -39,13 +39,17 @@ test('attached dashboard retries after a transient local control failure', async
   await remote.refresh();
   assert.equal(calls, 1);
   assert.equal(remote.stopped, false);
+  assert.equal(remote.eventBus.getHistory().at(-1).type, 'local.control');
   assert.equal(remote.eventBus.getHistory().at(-1).status, 'disconnected');
+  assert.equal(remote.dashboard.connection.status, 'connected');
 
   await remote.refresh();
   assert.equal(calls, 2);
   assert.equal(remote.stopped, false);
+  assert.equal(remote.eventBus.getHistory().at(-1).type, 'local.control');
   assert.equal(remote.eventBus.getHistory().at(-1).status, 'connected');
-  assert.equal(remote.eventBus.getHistory().at(-1).localControlRecovered, true);
-  assert.equal(seen.some((event) => event.status === 'disconnected'), true);
-  assert.equal(seen.some((event) => event.localControlRecovered), true);
+  assert.equal(remote.eventBus.getHistory().at(-1).cloudStatus, 'reconnecting');
+  assert.equal(remote.dashboard.connection.status, 'reconnecting');
+  assert.equal(seen.some((event) => event.type === 'local.control' && event.status === 'disconnected'), true);
+  assert.equal(seen.some((event) => event.type === 'local.control' && event.status === 'connected'), true);
 });

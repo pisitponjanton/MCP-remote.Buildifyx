@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -43,5 +43,102 @@ test('runtime event history compacts large command arguments', async () => {
     assert.equal(started.input.args.length, 13);
     assert.match(started.input.args[0], /more chars/);
     assert.equal(started.input.args.at(-1), '<8 more args>');
+  });
+});
+
+test('runtime cancellation terminates an active command process tree', async () => {
+  await withTemp(async (root) => {
+    const sentinel = path.join(root, 'late-child-output.txt');
+    const grandchildScript = `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'late'), 1200);`;
+    const parentScript = `const { spawn } = require('node:child_process'); spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { stdio: 'ignore' }); setTimeout(() => {}, 5000);`;
+    const runtime = createRuntime({ root, fullAccess: true });
+    const requestId = 'req_cancel_process_tree';
+    const execution = runtime.dispatch('run_command', {
+      command: 'node',
+      args: ['-e', parentScript],
+      timeoutMs: 5000
+    }, { requestId });
+
+    for (let index = 0; index < 100 && !runtime.services.run_command.getActiveRequestIds().includes(requestId); index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(runtime.services.run_command.getActiveRequestIds().includes(requestId), true);
+    assert.equal(runtime.cancel(requestId, 'Cancelled by test'), true);
+    await assert.rejects(execution, (error) => error?.code === ErrorCode.REQUEST_CANCELLED);
+    assert.equal(runtime.services.run_command.getActiveRequestIds().includes(requestId), false);
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await assert.rejects(access(sentinel), (error) => error?.code === 'ENOENT');
+  });
+});
+
+test('force stop terminates an active command without waiting for graceful timeout', async () => {
+  await withTemp(async (root) => {
+    const runtime = createRuntime({ root, fullAccess: true });
+    const requestId = 'req_force_stop';
+    const execution = runtime.dispatch('run_command', {
+      command: 'node',
+      args: ['-e', "process.on('SIGTERM', () => {}); setTimeout(() => {}, 10000);"],
+      timeoutMs: 10000
+    }, { requestId });
+
+    for (let index = 0; index < 100 && !runtime.services.run_command.getActiveRequestIds().includes(requestId); index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(runtime.services.run_command.getActiveRequestIds().includes(requestId), true);
+
+    const startedAt = Date.now();
+    await runtime.stop('Force stop test', { force: true });
+    const elapsed = Date.now() - startedAt;
+    assert.ok(elapsed < 1400, `force stop took ${elapsed} ms`);
+    await assert.rejects(execution, (error) => error?.code === ErrorCode.REQUEST_CANCELLED);
+    assert.equal(runtime.services.run_command.getActiveRequestIds().length, 0);
+  });
+});
+
+test('runtime rejects duplicate active request ids and completed replays', async () => {
+  await withTemp(async (root) => {
+    const runtime = createRuntime({ root });
+    let release;
+    let started = 0;
+    const gate = new Promise((resolve) => { release = resolve; });
+    runtime.services.get_system_info = async () => {
+      started += 1;
+      await gate;
+      return { allowedRoot: root };
+    };
+    const requestId = 'req_duplicate_runtime';
+    const first = runtime.dispatch('get_system_info', {}, { requestId });
+    for (let index = 0; index < 50 && started === 0; index += 1) await new Promise((resolve) => setTimeout(resolve, 2));
+    assert.equal(started, 1);
+
+    await assert.rejects(
+      runtime.dispatch('get_system_info', {}, { requestId }),
+      (error) => error?.code === ErrorCode.INVALID_INPUT && error?.details?.state === 'active'
+    );
+    const duplicateEvents = runtime.eventBus.getHistory().filter((event) => event.requestId === requestId);
+    assert.equal(duplicateEvents.filter((event) => event.type === 'tool.started').length, 1);
+    assert.equal(duplicateEvents.filter((event) => event.type === 'tool.rejected').length, 1);
+    assert.equal(duplicateEvents.some((event) => event.type === 'tool.failed'), false);
+    release();
+    await first;
+
+    await assert.rejects(
+      runtime.dispatch('get_system_info', {}, { requestId }),
+      (error) => error?.code === ErrorCode.INVALID_INPUT && error?.details?.state === 'completed'
+    );
+    assert.equal(started, 1);
+  });
+});
+
+test('runtime stop rejects requests that arrive after shutdown begins', async () => {
+  await withTemp(async (root) => {
+    const runtime = createRuntime({ root });
+    await runtime.stop('Stopping for test');
+    assert.equal(runtime.acceptingRequests, false);
+    await assert.rejects(
+      runtime.dispatch('get_system_info', {}, { requestId: 'req_after_stop' }),
+      (error) => error?.code === ErrorCode.REQUEST_CANCELLED
+    );
   });
 });

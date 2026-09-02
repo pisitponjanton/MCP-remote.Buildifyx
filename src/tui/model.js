@@ -30,7 +30,8 @@ export function groupActivities(events) {
       const started = startedEvent ?? { ...toolEvent, type: 'tool.started', input: {} };
       const completed = items.find((event) => event.type === 'tool.completed');
       const failed = items.find((event) => event.type === 'tool.failed');
-      const permission = items.find((event) => event.type === 'permission.evaluated');
+      const permissions = items.filter((event) => event.type === 'permission.evaluated');
+      const permission = permissions.at(-1) ?? null;
       const process = items.find((event) => event.type === 'process.started');
       const resources = items.filter((event) => event.type === 'resource.accessed');
       const last = items.at(-1) ?? started;
@@ -40,6 +41,7 @@ export function groupActivities(events) {
         completed,
         failed,
         permission,
+        permissions,
         process,
         resources,
         last,

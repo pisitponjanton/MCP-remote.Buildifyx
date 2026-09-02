@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
-import { requestInstanceControl } from '../../src/utils/instance-control.js';
+import { instancePolicyPath } from '../../src/permissions/store.js';
+import { instanceControlPath, requestInstanceControl } from '../../src/utils/instance-control.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const cliPath = path.join(repoRoot, 'src', 'cli.js');
@@ -97,7 +99,7 @@ test('foreground agent exits cleanly on SIGINT and removes its registry record',
   }
 });
 
-test('rm --all stops a live agent and resets its instance policy', { skip: process.platform === 'win32' }, async () => {
+test('rm --all stops a live agent and resets its instance policy', async () => {
   const fixture = await setupFixture();
   const agent = spawnCli(['--no-tui', '--root', fixture.workspace, '--name', 'rm-all-test'], fixture);
   const agentOutput = collect(agent);
@@ -133,7 +135,40 @@ test('rm --all stops a live agent and resets its instance policy', { skip: proce
 });
 
 
-test('restart keeps the same instance identity and policy while replacing the background process', { skip: process.platform === 'win32' }, async () => {
+test('rm -f force-stops a live agent within the CLI timeout and cleans its settings', async () => {
+  const fixture = await setupFixture();
+  const agent = spawnCli(['--no-tui', '--root', fixture.workspace, '--name', 'rm-force-test'], fixture);
+  const agentOutput = collect(agent);
+  try {
+    await waitFor(async () => {
+      if (agent.exitCode !== null || agent.signalCode !== null) throw new Error(`Agent exited before registry ready: ${agentOutput().stderr || agentOutput().stdout}`);
+      return (await instanceJsonFiles(fixture)).length === 1;
+    });
+    await waitFor(() => agentOutput().stdout.includes('Buildifyx Desktop Agent'));
+
+    const agentExit = once(agent, 'exit');
+    const startedAt = Date.now();
+    const remover = spawnCli(['rm', '-f', 'rm-force-test'], fixture);
+    const removerOutput = collect(remover);
+    const [removeCode] = await once(remover, 'exit');
+    const elapsed = Date.now() - startedAt;
+    assert.equal(removeCode, 0, removerOutput().stderr);
+    assert.ok(elapsed < 1500, `rm -f took ${elapsed} ms`);
+
+    const [agentCode, agentSignal] = await agentExit;
+    assert.equal(agentSignal, null);
+    assert.equal(agentCode, 1, agentOutput().stderr);
+    await waitFor(async () => (await instanceJsonFiles(fixture)).length === 0);
+    assert.deepEqual(await readdir(path.join(fixture.buildifyxHome, 'instance-settings')), []);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.deepEqual(await instanceJsonFiles(fixture), []);
+  } finally {
+    if (agent.exitCode === null && agent.signalCode === null) agent.kill('SIGKILL');
+    await cleanupFixture(fixture);
+  }
+});
+
+test('restart keeps the same instance identity and policy while replacing the background process', async () => {
   const fixture = await setupFixture();
   let cleanupNeeded = false;
   try {
@@ -150,6 +185,8 @@ test('restart keeps the same instance identity and policy while replacing the ba
       try { return Boolean(JSON.parse(await readFile(recordPath, 'utf8')).controlPath); } catch { return false; }
     });
     const before = JSON.parse(await readFile(recordPath, 'utf8'));
+    const packageVersion = JSON.parse(await readFile(path.join(repoRoot, 'package.json'), 'utf8')).version;
+    await writeFile(recordPath, `${JSON.stringify({ ...before, agentVersion: '0.0.0-test' }, null, 2)}\n`);
 
     const policyUpdate = await requestInstanceControl(before, 'policy.setCategory', {
       timeoutMs: 1500,
@@ -181,6 +218,7 @@ test('restart keeps the same instance identity and policy while replacing the ba
     const after = JSON.parse(await readFile(recordPath, 'utf8'));
     assert.equal(after.instanceId, before.instanceId);
     assert.notEqual(after.pid, before.pid);
+    assert.equal(after.agentVersion, packageVersion);
     assert.equal(after.logPath, before.logPath);
     assert.equal(typeof after.logPath, 'string');
     await readFile(after.logPath, 'utf8');
@@ -193,7 +231,7 @@ test('restart keeps the same instance identity and policy while replacing the ba
     await cleanupFixture(fixture);
   }
 });
-test('restart failure preserves the instance record, log path, and policy for recovery', { skip: process.platform === 'win32' }, async () => {
+test('restart failure preserves the instance record, log path, and policy for recovery', async () => {
   const fixture = await setupFixture();
   let cleanupNeeded = false;
   try {
@@ -229,11 +267,80 @@ test('restart failure preserves the instance record, log path, and policy for re
     assert.equal(typeof after.lastError, 'string');
     assert.equal((await readdir(settingsRoot)).length, 1);
     await readFile(after.logPath, 'utf8');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const stable = JSON.parse(await readFile(recordPath, 'utf8'));
+    assert.equal(stable.status, 'restart_failed');
+    assert.equal(stable.logPath, before.logPath);
   } finally {
     if (cleanupNeeded) {
       const remover = spawnCli(['rm', '--all'], fixture);
       await once(remover, 'exit').catch(() => undefined);
     }
+    await cleanupFixture(fixture);
+  }
+});
+
+test('restart child control failure preserves the existing instance policy', async () => {
+  const fixture = await setupFixture();
+  let blocker = null;
+  try {
+    const instanceId = 'inst_restart_control_failure';
+    const name = 'restart-control-failure-test';
+    const instancesDir = path.join(fixture.buildifyxHome, 'instances');
+    const recordPath = path.join(instancesDir, `${instanceId}.json`);
+    const logPath = path.join(instancesDir, `${instanceId}.log`);
+    await mkdir(instancesDir, { recursive: true });
+    await writeFile(logPath, 'restart control failure test\n');
+    await writeFile(recordPath, `${JSON.stringify({
+      instanceId,
+      name,
+      workspace: fixture.workspace,
+      mode: 'background',
+      pid: 0,
+      status: 'starting',
+      startedAt: new Date().toISOString(),
+      agentVersion: '0.2.0',
+      deviceName: 'lifecycle-test-device',
+      logPath
+    }, null, 2)}\n`);
+
+    const policyPath = instancePolicyPath(instanceId, fixture.buildifyxHome);
+    await mkdir(path.dirname(policyPath), { recursive: true });
+    await writeFile(policyPath, `${JSON.stringify({ categories: { read: 'deny' }, additionalRoots: [], commandRules: [] }, null, 2)}\n`);
+
+    const controlBlocker = instanceControlPath(instanceId, instancesDir);
+    if (process.platform === 'win32') {
+      blocker = net.createServer();
+      await new Promise((resolve, reject) => {
+        const onError = (error) => reject(error);
+        blocker.once('error', onError);
+        blocker.listen(controlBlocker, () => {
+          blocker.off('error', onError);
+          resolve();
+        });
+      });
+    } else {
+      await mkdir(controlBlocker);
+    }
+
+    const child = spawnCli([
+      '--root', fixture.workspace,
+      '--instance-id', instanceId,
+      '--instance-name', name,
+      '--background-child',
+      '--restart-child'
+    ], fixture);
+    const output = collect(child);
+    const [code] = await once(child, 'exit');
+    assert.equal(code, 1, output().stdout);
+
+    const after = JSON.parse(await readFile(recordPath, 'utf8'));
+    assert.equal(after.instanceId, instanceId);
+    assert.equal(after.status, 'restart_child_failed');
+    assert.equal(after.logPath, logPath);
+    assert.equal(JSON.parse(await readFile(policyPath, 'utf8')).categories.read, 'deny');
+  } finally {
+    if (blocker) await new Promise((resolve) => blocker.close(() => resolve()));
     await cleanupFixture(fixture);
   }
 });

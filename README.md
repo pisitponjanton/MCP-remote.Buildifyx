@@ -237,7 +237,7 @@ Buildifyx Cloud 0.2 remains backward-compatible with bdxa 0.1 agents. An agent w
 The local agent remains the final permission authority. Available profiles are:
 
 ```text
-Detached instances keep ASK requests pending. `bdxa attach <name|id>` opens the full workspace dashboard, including the normal approval UI, so the request can be resolved without restarting the agent. Outside-workspace scope and the requested operation are evaluated as separate permission gates, so approving a location does not implicitly approve a denied write or a dangerous/custom command; a request may require a second approval for the operation itself. Cloud request timeouts send `tool.cancel` back to bdxa, and cancellation is retained across sequential permission gates so approving an earlier gate later cannot revive a timed-out request.
+Auto
 Read only
 Allow all
 Custom
@@ -251,7 +251,7 @@ The default Auto profile permits normal reads, writes, and approved developer co
 
 Foreground TUI requests show the exact action and let the user choose a decision. `Q` denies/goes back and `Ctrl+C` exits bdxa.
 
-Detached instances keep ASK requests pending. `bdxa attach <name|id>` opens the full workspace dashboard, including the normal approval UI, so the request can be resolved without restarting the agent. Cloud request timeouts send `tool.cancel` back to bdxa; a timed-out pending approval is cancelled so approving it later cannot trigger a delayed action.
+Detached instances keep ASK requests pending. `bdxa attach <name|id>` opens the full workspace dashboard, including the normal approval UI, so the request can be resolved without restarting the agent. Outside-workspace scope and the requested operation are evaluated as separate permission gates, and each gate receives its own approval ID so a stale or duplicate approval cannot resolve the next gate. Cloud request timeouts send `tool.cancel` back to bdxa; cancellation is retained across sequential permission gates and is honored until a file operation reaches its final side-effect commit point. After that commit point the operation is allowed to finish rather than reporting a false cancellation. Active and recently completed Cloud request IDs are rejected if replayed, preventing duplicate tool side effects.
 
 ### Command executable scope
 
@@ -352,7 +352,7 @@ bdxa --version
 - Tool arguments received from Cloud are validated again by the local Agent before permission evaluation or execution.
 - Outside-workspace scope and operation permissions are independent gates; allowing a location cannot override a denied write, command, or dangerous-operation policy.
 - Remote Cloud origins must use HTTPS/WSS. Plain HTTP/WS is accepted only for loopback development endpoints such as `localhost` and `127.0.0.1`.
-- Tool arguments received from Cloud are validated again by the local Agent before permission evaluation or execution.
+- The runtime stops accepting new tool calls as soon as shutdown begins, and duplicate active/recent request IDs are rejected to prevent replayed side effects.
 - `bdxa rm` verifies a local instance control channel instead of trusting a stale PID record.
 - Local credentials, policies, instance metadata, audit logs, and detached instance logs use restricted local file permissions where supported.
 - Commands execute without a shell unless a supported executable itself starts one.

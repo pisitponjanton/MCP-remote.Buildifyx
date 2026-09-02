@@ -119,7 +119,7 @@ export function replaceCharacters(content, start, end, replacement) {
   return content.slice(0, startOffset) + replacement + content.slice(endOffset);
 }
 
-export async function createUtf8File(filePath, content) {
+export async function createUtf8File(filePath, content, { beforeCommit } = {}) {
   const byteLength = Buffer.byteLength(content, 'utf8');
   if (byteLength > MAX_TEXT_FILE_BYTES) {
     throw new Error(`File exceeds the ${MAX_TEXT_FILE_BYTES}-byte limit.`);
@@ -127,6 +127,7 @@ export async function createUtf8File(filePath, content) {
 
   let handle;
   try {
+    await beforeCommit?.();
     handle = await open(filePath, 'wx', 0o644);
     await handle.writeFile(content, 'utf8');
     await handle.sync();
@@ -142,7 +143,7 @@ export async function createUtf8File(filePath, content) {
   }
 }
 
-export async function writeUtf8FileAtomic(filePath, content) {
+export async function writeUtf8FileAtomic(filePath, content, { beforeCommit } = {}) {
   const byteLength = Buffer.byteLength(content, 'utf8');
   if (byteLength > MAX_TEXT_FILE_BYTES) {
     throw new Error(`Edited file exceeds the ${MAX_TEXT_FILE_BYTES}-byte limit.`);
@@ -170,6 +171,7 @@ export async function writeUtf8FileAtomic(filePath, content) {
       await handle.close();
     }
 
+    await beforeCommit?.();
     await rename(temporaryPath, filePath);
     temporaryCreated = false;
   } finally {

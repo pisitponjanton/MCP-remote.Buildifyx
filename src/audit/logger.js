@@ -8,6 +8,7 @@ export function defaultAuditPath() {
 
 export function createAuditLogger({ eventBus, filePath = defaultAuditPath(), context = null }) {
   let unsubscribe;
+  let tail = Promise.resolve();
 
   async function writeEvent(event) {
     await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
@@ -21,11 +22,13 @@ export function createAuditLogger({ eventBus, filePath = defaultAuditPath(), con
     }
   }
 
+  function enqueue(event) {
+    tail = tail.then(() => writeEvent(event)).catch(() => undefined);
+  }
+
   function start() {
     if (unsubscribe) return;
-    unsubscribe = eventBus.subscribe((event) => {
-      void writeEvent(event).catch(() => undefined);
-    });
+    unsubscribe = eventBus.subscribe(enqueue);
   }
 
   function stop() {
@@ -33,5 +36,9 @@ export function createAuditLogger({ eventBus, filePath = defaultAuditPath(), con
     unsubscribe = undefined;
   }
 
-  return { start, stop, filePath };
+  async function flush() {
+    await tail;
+  }
+
+  return { start, stop, flush, filePath };
 }

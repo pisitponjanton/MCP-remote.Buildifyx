@@ -107,11 +107,12 @@ function RequestDetails({ item, compact, maxRows = Number.POSITIVE_INFINITY }) {
   if (!item) return h(Text, { dimColor: true }, 'No request selected yet.');
   const resourceLimit = compact ? 3 : 7;
   const resources = item.resources.slice(-resourceLimit);
+  const permissions = item.permissions?.length ? item.permissions : item.permission ? [item.permission] : [];
   const lines = [
     h(Text, { key: 'tool', wrap: 'truncate-end' }, `Tool:       ${item.started.tool}`),
     h(Text, { key: 'status', wrap: 'truncate-end' }, `Status:     ${item.status.toUpperCase()}`),
     item.summary ? h(Text, { key: 'request', wrap: 'truncate-end' }, `Request:    ${item.summary}`) : null,
-    item.permission ? h(Text, { key: 'permission', wrap: 'truncate-end' }, `Permission: ${item.permission.category} → ${item.permission.decision}`) : null,
+    ...permissions.map((permission, index) => h(Text, { key: `permission-${index}`, wrap: 'truncate-end' }, `${index === 0 ? 'Permission:' : '           '} ${permission.category} → ${permission.decision}`)),
     item.process ? h(Text, { key: 'command', wrap: 'truncate-end' }, `Command:    ${item.process.command} ${(item.process.args ?? []).join(' ')}`) : null,
     item.process ? h(Text, { key: 'cwd', wrap: 'truncate-end' }, `Cwd:        ${item.process.cwd}`) : null,
     ...resources.map((resource) => h(Text, { key: resource.id, wrap: 'truncate-end' }, `${String(resource.operation).toUpperCase().padEnd(11)} ${resource.path}`)),
@@ -317,6 +318,13 @@ export function App({ eventBus, approvalQueue, policyManager, version, updateSta
     if (event.type === 'tool.started') { setMessage(`Running tool: ${event.tool}`); return; }
     if (event.type === 'tool.completed') { setMessage(`Completed tool: ${event.tool} · ${event.durationMs} ms`); return; }
     if (event.type === 'tool.failed') { setMessage(`Failed tool: ${event.tool} · ${event.error?.code ?? 'ERROR'}`); return; }
+    if (event.type === 'local.control') {
+      if (event.status === 'connected' && event.cloudStatus) setConnectionStatus(event.cloudStatus);
+      setMessage(event.status === 'connected'
+        ? 'Attached dashboard control reconnected.'
+        : 'Attached dashboard control disconnected. Retrying...');
+      return;
+    }
     if (event.type !== 'cloud.connection') return;
     setConnectionStatus(event.status);
     if (event.status === 'connected') setMessage('Connected. Waiting for requests from ChatGPT...');
