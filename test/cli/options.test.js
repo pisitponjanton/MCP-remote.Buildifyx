@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { runUpdateCommand } from '../../src/cli/main.js';
 import { parseInvocation } from '../../src/cli/options.js';
 
 test('bdxa defaults to cloud mode', () => {
@@ -18,10 +19,28 @@ test('instance management commands preserve docker-style arguments', () => {
   assert.deepEqual(parseInvocation(['ls', '-q']), { command: 'ls', args: ['-q'] });
   assert.deepEqual(parseInvocation(['inspect', 'backend']), { command: 'inspect', args: ['backend'] });
   assert.deepEqual(parseInvocation(['attach', 'backend']), { command: 'attach', args: ['backend'] });
+  assert.deepEqual(parseInvocation(['restart', 'backend']), { command: 'restart', args: ['backend'] });
+  assert.deepEqual(parseInvocation(['restart', '--all']), { command: 'restart', args: ['--all'] });
   assert.deepEqual(parseInvocation(['rm', '-f', 'backend']), { command: 'rm', args: ['-f', 'backend'] });
   assert.deepEqual(parseInvocation(['rm', '--all']), { command: 'rm', args: ['--all'] });
 });
 
 test('login command preserves login arguments', () => {
   assert.deepEqual(parseInvocation(['login', '--token', 'example']), { command: 'login', args: ['--token', 'example'] });
+});
+
+test('update --restart runs update before restarting all background instances', async () => {
+  const calls = [];
+  await runUpdateCommand(['--restart'], {
+    update: async () => { calls.push('update'); },
+    restart: async (args) => { calls.push(['restart', ...args]); }
+  });
+  assert.deepEqual(calls, ['update', ['restart', '--all']]);
+
+  calls.length = 0;
+  await runUpdateCommand([], {
+    update: async () => { calls.push('update'); },
+    restart: async () => { calls.push('restart'); }
+  });
+  assert.deepEqual(calls, ['update']);
 });

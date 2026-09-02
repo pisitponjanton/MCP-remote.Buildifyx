@@ -14,6 +14,23 @@ const DANGEROUS_COMMANDS = new Set(['rm', 'rmdir', 'del', 'erase', 'format', 'sh
 const PACKAGE_MANAGERS = new Set(['npm', 'pnpm', 'yarn']);
 const SAFE_PACKAGE_MANAGER_COMMANDS = new Set(['view', 'info', 'show', 'search', 'outdated', 'list', 'ls', 'why', 'help', '--version', '-v']);
 const SAFE_GIT_COMMANDS = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'grep', 'describe', 'blame', 'shortlog', 'merge-base', 'name-rev', 'cat-file', 'for-each-ref']);
+const DANGEROUS_GIT_OPTIONS = new Set([
+  '--ext-diff',
+  '--textconv',
+  '--filters',
+  '--no-index',
+  '--open-files-in-pager',
+  '--output',
+  '--paginate',
+  '--exec-path',
+  '--config-env'
+]);
+const DANGEROUS_GIT_OPTION_PREFIXES = [
+  '--open-files-in-pager=',
+  '--output=',
+  '--exec-path=',
+  '--config-env='
+];
 
 function startsWithArgs(args, prefix = []) {
   return prefix.every((value, index) => args[index] === value);
@@ -39,21 +56,34 @@ export function matchCommandRule(policy, command, args = []) {
 function packageManagerNeedsApproval(command, args) {
   if (!PACKAGE_MANAGERS.has(command)) return false;
   const subcommand = args[0] ?? '';
-  if (!subcommand || SAFE_PACKAGE_MANAGER_COMMANDS.has(subcommand)) return false;
-  if (subcommand === 'config') return !['get', 'list'].includes(args[1]);
+  if (!subcommand) return command !== 'npm';
+  if (SAFE_PACKAGE_MANAGER_COMMANDS.has(subcommand)) return false;
+  if (subcommand === 'config') {
+    return !(command === 'npm' && args.length === 3 && args[1] === 'get' && args[2] === 'registry');
+  }
   if (subcommand === 'audit') return args[1] === 'fix';
   return true;
 }
 
+function hasDangerousGitOption(args) {
+  return args.some((arg) => {
+    if (DANGEROUS_GIT_OPTIONS.has(arg)) return true;
+    return DANGEROUS_GIT_OPTION_PREFIXES.some((prefix) => arg.startsWith(prefix));
+  });
+}
+
 function gitNeedsApproval(args) {
   const subcommand = args[0] ?? '';
-  if (!subcommand || SAFE_GIT_COMMANDS.has(subcommand)) return false;
-  if (subcommand === 'branch') {
-    return !args.slice(1).every((arg) => ['--show-current', '--list', '-l', '-a', '-r', '-v', '-vv', '--merged', '--no-merged'].includes(arg) || arg.startsWith('--format='));
+  if (!subcommand || hasDangerousGitOption(args)) return true;
+  if (!SAFE_GIT_COMMANDS.has(subcommand)) {
+    if (subcommand === 'branch') {
+      return !args.slice(1).every((arg) => ['--show-current', '--list', '-l', '-a', '-r', '-v', '-vv', '--merged', '--no-merged'].includes(arg) || arg.startsWith('--format='));
+    }
+    if (subcommand === 'remote') return !(!args[1] || args[1] === '-v' || args[1] === 'get-url');
+    if (subcommand === 'tag') return !(args.length === 1 || ['--list', '-l'].includes(args[1]));
+    return true;
   }
-  if (subcommand === 'remote') return !(!args[1] || args[1] === '-v' || args[1] === 'get-url');
-  if (subcommand === 'tag') return !(args.length === 1 || ['--list', '-l'].includes(args[1]));
-  return true;
+  return false;
 }
 
 export function isDangerousCommand(command, args = []) {
@@ -74,30 +104,35 @@ export function isFullAccessPolicy(policy) {
     .every((category) => policy.categories[category] === Decision.ALLOW);
 }
 
-export function evaluateRequest({ toolName, input = {}, policy, pathScope = 'root' }) {
+export function evaluateOutsideRoot(policy) {
+  return {
+    decision: policy.categories.outsideRoot ?? Decision.DENY,
+    category: 'outsideRoot',
+    reason: 'Path is outside configured roots'
+  };
+}
+
+export function evaluateRequest({ toolName, input = {}, policy }) {
   const category = TOOL_CATEGORY[toolName];
   if (!category) return { decision: Decision.DENY, category: 'unknown', reason: 'Unknown tool' };
-
-  if (pathScope === 'outside') {
-    return {
-      decision: policy.categories.outsideRoot ?? Decision.DENY,
-      category: 'outsideRoot',
-      reason: 'Path is outside configured roots'
-    };
-  }
 
   if (toolName === 'run_command') {
     const args = input.args ?? [];
     const rule = matchCommandRule(policy, input.command, args);
-    if (rule) {
+    const dangerous = isDangerousCommand(input.command, args);
+    const exactAllowRule = rule?.action === Decision.ALLOW
+      && (rule.argsPrefix?.length ?? 0) === args.length;
+    if (rule && (!dangerous || rule.action !== Decision.ALLOW || exactAllowRule)) {
       const pattern = [rule.executable, ...(rule.argsPrefix ?? [])].join(' ');
       return { decision: rule.action, category: 'commandRule', rule, reason: `Matched command rule: ${pattern}` };
     }
-    if (isDangerousCommand(input.command, args)) {
+    if (dangerous) {
       return {
         decision: policy.categories.dangerous ?? Decision.ASK,
         category: 'dangerous',
-        reason: 'Command is potentially destructive'
+        reason: rule?.action === Decision.ALLOW
+          ? 'Command rule matched, but dangerous commands require an exact argument match'
+          : 'Command is potentially destructive or can invoke external behavior'
       };
     }
   }

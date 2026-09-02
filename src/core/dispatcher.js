@@ -1,10 +1,23 @@
 import { randomUUID } from 'node:crypto';
 import { AgentError, ErrorCode, normalizeError } from './errors.js';
 
+function compactText(value, maxLength = 160) {
+  if (typeof value !== 'string' || value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength)}…<${value.length - maxLength} more chars>`;
+}
+
 function summarizeInput(toolName, input = {}) {
   const summary = { ...input };
   if (typeof summary.content === 'string') summary.content = `<${summary.content.length} chars>`;
   if (Array.isArray(summary.lines)) summary.lines = `<${summary.lines.length} lines>`;
+  if (Array.isArray(summary.args)) {
+    const shown = summary.args.slice(0, 12).map((arg) => compactText(arg));
+    if (summary.args.length > shown.length) shown.push(`<${summary.args.length - shown.length} more args>`);
+    summary.args = shown;
+  }
+  if (typeof summary.command === 'string') summary.command = compactText(summary.command, 256);
+  if (typeof summary.cwd === 'string') summary.cwd = compactText(summary.cwd, 512);
+  if (typeof summary.path === 'string') summary.path = compactText(summary.path, 512);
   return summary;
 }
 

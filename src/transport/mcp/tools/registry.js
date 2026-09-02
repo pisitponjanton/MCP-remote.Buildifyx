@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import * as z from 'zod/v4';
+import { AgentError, ErrorCode } from '../../../core/errors.js';
 import { getCommandToolDefinitions } from './commands.js';
 import { getFileToolDefinitions } from './files.js';
 import { getSystemToolDefinitions } from './system.js';
@@ -29,6 +30,21 @@ export function getMcpToolDefinitions(options = {}) {
     ...getFileToolDefinitions(options),
     ...getCommandToolDefinitions(options)
   ];
+}
+
+export function parseMcpToolInput(toolName, input = {}, options = {}) {
+  const definition = getMcpToolDefinitions(options).find((tool) => tool.name === toolName);
+  if (!definition) throw new AgentError(ErrorCode.TOOL_NOT_FOUND, `Unknown tool: ${toolName}`, { toolName });
+  if (!definition.inputSchema) return input ?? {};
+
+  try {
+    return definition.inputSchema.parse(input ?? {});
+  } catch (error) {
+    const issues = Array.isArray(error?.issues)
+      ? error.issues.map((issue) => ({ path: issue.path, code: issue.code, message: issue.message }))
+      : undefined;
+    throw new AgentError(ErrorCode.INVALID_INPUT, `Invalid input for ${toolName}.`, { toolName, issues });
+  }
 }
 
 export function createToolManifest(options = {}) {

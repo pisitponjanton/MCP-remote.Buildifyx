@@ -214,6 +214,7 @@ test('process parser recognizes agent invocations and ignores management command
     { instanceId: null, name: null, root: null, mode: 'foreground' }
   );
   assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js ls'), null);
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js restart --all'), null);
   assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js status'), null);
 });
 

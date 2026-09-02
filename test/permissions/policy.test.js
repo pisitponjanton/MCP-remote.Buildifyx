@@ -102,12 +102,17 @@ test('auto policy asks before script-capable package-manager and mutating git co
   const askCases = [
     { command: 'npm', args: ['run', 'build'] },
     { command: 'npm', args: ['install'] },
+    { command: 'npm', args: ['config', 'list'] },
+    { command: 'pnpm', args: [] },
     { command: 'pnpm', args: ['exec', 'node', '--version'] },
+    { command: 'yarn', args: [] },
     { command: 'yarn', args: ['dlx', 'example'] },
     { command: 'git', args: ['config', 'alias.shell', '!node -e process.exit(0)'] },
-    { command: 'git', args: ['checkout', '-b', 'feature'] }
+    { command: 'git', args: ['checkout', '-b', 'feature'] },
+    { command: 'git', args: ['diff', '--no-index', '/etc/hosts', '/etc/passwd'] },
+    { command: 'git', args: ['cat-file', '--filters', 'HEAD:README.md'] },
+    { command: 'git', args: ['grep', '--open-files-in-pager=cat', 'needle'] }
   ];
-
   for (const input of askCases) {
     const evaluation = evaluateRequest({ toolName: 'run_command', input, policy });
     assert.equal(evaluation.decision, 'ask', `${input.command} ${input.args.join(' ')} should require approval`);
@@ -126,4 +131,98 @@ test('auto policy asks before script-capable package-manager and mutating git co
     assert.equal(evaluation.decision, 'allow', `${input.command} ${input.args.join(' ')} should stay in restricted auto mode`);
     assert.equal(evaluation.category, 'command');
   }
+});
+
+test('dangerous git options cannot extend a broader allow rule', () => {
+  const broadPolicy = normalizePolicy({
+    commandRules: [{ executable: 'git', argsPrefix: ['diff'], action: 'allow' }]
+  });
+  const extended = evaluateRequest({
+    toolName: 'run_command',
+    input: { command: 'git', args: ['diff', '--ext-diff'] },
+    policy: broadPolicy
+  });
+  assert.equal(extended.decision, 'ask');
+  assert.equal(extended.category, 'dangerous');
+
+  const exactPolicy = normalizePolicy({
+    commandRules: [{ executable: 'git', argsPrefix: ['diff', '--ext-diff'], action: 'allow' }]
+  });
+  const exact = evaluateRequest({
+    toolName: 'run_command',
+    input: { command: 'git', args: ['diff', '--ext-diff'] },
+    policy: exactPolicy
+  });
+  assert.equal(exact.decision, 'allow');
+  assert.equal(exact.category, 'commandRule');
+
+  const extendedExact = evaluateRequest({
+    toolName: 'run_command',
+    input: { command: 'git', args: ['diff', '--ext-diff', '--stat'] },
+    policy: exactPolicy
+  });
+  assert.equal(extendedExact.decision, 'ask');
+  assert.equal(extendedExact.category, 'dangerous');
+});
+
+test('outside-root permission cannot bypass a denied write operation', async () => {
+  await withTemp(async (base) => {
+    const root = path.join(base, 'root');
+    const outside = path.join(base, 'outside');
+    await import('node:fs/promises').then(({ mkdir }) => Promise.all([mkdir(root), mkdir(outside)]));
+    const policyManager = createPolicyManager(normalizePolicy({
+      categories: { write: 'deny', outsideRoot: 'ask' }
+    }), { filePath: path.join(base, 'policy.json') });
+    const runtime = createRuntime({ root, policyManager, interactive: true });
+
+    await assert.rejects(
+      () => runtime.dispatch('write_file', { path: path.join(outside, 'blocked.txt'), content: 'blocked' }),
+      (error) => error?.code === 'PERMISSION_DENIED' && error?.details?.category === 'write'
+    );
+    assert.equal(runtime.approvalQueue.getPending().length, 0);
+  });
+});
+
+test('outside-root and dangerous command permissions require separate approvals', async () => {
+  await withTemp(async (base) => {
+    const root = path.join(base, 'root');
+    const outside = path.join(base, 'outside');
+    await import('node:fs/promises').then(({ mkdir }) => Promise.all([mkdir(root), mkdir(outside)]));
+    const policyManager = createPolicyManager(normalizePolicy({
+      categories: { outsideRoot: 'ask', dangerous: 'ask' }
+    }), { filePath: path.join(base, 'policy.json') });
+    const runtime = createRuntime({ root, policyManager, interactive: true });
+
+    const execution = runtime.dispatch('run_command', { command: 'git', args: ['--version'], cwd: outside });
+    const scopeRequest = await waitForPending(runtime.approvalQueue);
+    assert.equal(scopeRequest.category, 'outsideRoot');
+    runtime.approvalQueue.resolve(scopeRequest.id, { action: 'allow', remember: null });
+
+    const commandRequest = await waitForPending(runtime.approvalQueue);
+    assert.equal(commandRequest.category, 'dangerous');
+    runtime.approvalQueue.resolve(commandRequest.id, { action: 'allow', remember: null });
+
+    const result = await execution;
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stdout, /git version/i);
+  });
+});
+
+test('outside-root approval does not unlock an arbitrary executable', async () => {
+  await withTemp(async (base) => {
+    const root = path.join(base, 'root');
+    const outside = path.join(base, 'outside');
+    await import('node:fs/promises').then(({ mkdir }) => Promise.all([mkdir(root), mkdir(outside)]));
+    const policyManager = createPolicyManager(normalizePolicy({
+      categories: { command: 'allow', outsideRoot: 'ask' }
+    }), { filePath: path.join(base, 'policy.json') });
+    const runtime = createRuntime({ root, policyManager, interactive: true });
+
+    const execution = runtime.dispatch('run_command', { command: 'node', args: ['--version'], cwd: outside });
+    const scopeRequest = await waitForPending(runtime.approvalQueue);
+    assert.equal(scopeRequest.category, 'outsideRoot');
+    runtime.approvalQueue.resolve(scopeRequest.id, { action: 'allow', remember: null });
+
+    await assert.rejects(execution, /Command is not allowed in restricted mode: node/);
+  });
 });

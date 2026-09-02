@@ -1,6 +1,6 @@
 import { AgentError, ErrorCode } from '../core/errors.js';
 import { classifyPath } from '../security/scope.js';
-import { describeRequest, evaluateRequest, getRequestedPath, isFullAccessPolicy, matchCommandRule } from './evaluator.js';
+import { describeRequest, evaluateOutsideRoot, evaluateRequest, getRequestedPath, isFullAccessPolicy, matchCommandRule } from './evaluator.js';
 import { Decision } from './policy.js';
 
 function resourceOperation(toolName) {
@@ -12,11 +12,17 @@ function resourceOperation(toolName) {
   return null;
 }
 
+function permissionDenied(toolName, evaluation) {
+  return new AgentError(ErrorCode.PERMISSION_DENIED, `Permission denied: ${evaluation.reason}`, {
+    toolName,
+    category: evaluation.category
+  });
+}
+
 export function createPermissionController({ root, policyManager, approvalQueue, eventBus }) {
   return async function authorize(toolName, input, requestId) {
     const policy = policyManager.get();
     let pathInfo = null;
-    let approvedByPrompt = false;
     const requestedPath = getRequestedPath(toolName, input);
 
     if (requestedPath) {
@@ -36,26 +42,35 @@ export function createPermissionController({ root, policyManager, approvalQueue,
       });
     }
 
-    const evaluation = evaluateRequest({
-      toolName,
-      input,
-      policy,
-      pathScope: pathInfo?.scope === 'outside' ? 'outside' : 'root'
-    });
+    // Scope and operation permissions are independent gates. An outside-root
+    // approval must never implicitly grant write/command/dangerous permission.
+    const evaluations = [];
+    if (pathInfo?.scope === 'outside') evaluations.push(evaluateOutsideRoot(policy));
+    evaluations.push(evaluateRequest({ toolName, input, policy }));
 
-    eventBus?.emit('permission.evaluated', {
-      requestId,
-      tool: toolName,
-      decision: evaluation.decision,
-      category: evaluation.category,
-      reason: evaluation.reason
-    });
+    for (const evaluation of evaluations) {
+      eventBus?.emit('permission.evaluated', {
+        requestId,
+        tool: toolName,
+        decision: evaluation.decision,
+        category: evaluation.category,
+        reason: evaluation.reason
+      });
+    }
 
-    let approved = evaluation.decision === Decision.ALLOW;
-    if (evaluation.decision === Decision.ASK) {
+    const denied = evaluations.find((evaluation) => evaluation.decision === Decision.DENY);
+    if (denied) throw permissionDenied(toolName, denied);
+
+    let commandApprovedByPrompt = false;
+    for (const evaluation of evaluations) {
+      if (evaluation.decision !== Decision.ASK) continue;
       if (!approvalQueue) {
-        throw new AgentError(ErrorCode.CONFIRMATION_REQUIRED, `Confirmation required: ${describeRequest(toolName, input)}`);
+        throw new AgentError(ErrorCode.CONFIRMATION_REQUIRED, `Confirmation required: ${describeRequest(toolName, input)}`, {
+          toolName,
+          category: evaluation.category
+        });
       }
+
       const decision = await approvalQueue.request({
         id: requestId,
         toolName,
@@ -65,28 +80,26 @@ export function createPermissionController({ root, policyManager, approvalQueue,
         pathInfo,
         evaluation
       });
-      approved = decision.action === 'allow';
-      approvedByPrompt = approved;
-      if (approved && decision.remember === 'command' && toolName === 'run_command') {
-        await policyManager.addCommandRule({ executable: input.command, argsPrefix: input.args ?? [], action: 'allow' });
-      }
-      if (approved && decision.remember === 'root' && pathInfo?.scope === 'outside') {
+      const approved = decision.action === Decision.ALLOW;
+      if (!approved) throw permissionDenied(toolName, evaluation);
+
+      if (evaluation.category === 'outsideRoot' && decision.remember === 'root' && pathInfo?.scope === 'outside') {
         await policyManager.addRoot(pathInfo.resolved);
       }
-    }
-
-    if (!approved || evaluation.decision === Decision.DENY) {
-      throw new AgentError(ErrorCode.PERMISSION_DENIED, `Permission denied: ${describeRequest(toolName, input)}`, {
-        toolName,
-        category: evaluation.category
-      });
+      if (evaluation.category !== 'outsideRoot' && decision.remember === 'command' && toolName === 'run_command') {
+        await policyManager.addCommandRule({ executable: input.command, argsPrefix: input.args ?? [], action: Decision.ALLOW });
+      }
+      if (evaluation.category !== 'outsideRoot' && toolName === 'run_command') commandApprovedByPrompt = true;
     }
 
     const currentPolicy = policyManager.get();
+    const commandRule = toolName === 'run_command' ? matchCommandRule(currentPolicy, input.command, input.args ?? []) : null;
     return {
       pathInfo,
       allowCustomCommand: toolName === 'run_command' && (
-        isFullAccessPolicy(currentPolicy) || approvedByPrompt || Boolean(matchCommandRule(currentPolicy, input.command, input.args ?? []))
+        isFullAccessPolicy(currentPolicy)
+        || commandApprovedByPrompt
+        || commandRule?.action === Decision.ALLOW
       )
     };
   };

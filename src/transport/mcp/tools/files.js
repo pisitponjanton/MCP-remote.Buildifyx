@@ -1,19 +1,20 @@
 import * as z from 'zod/v4';
 import { MAX_TEXT_FILE_BYTES } from '../../../services/files.js';
 
-const FilePath = z.string().min(1).describe('Path relative to the configured root directory.');
+const FilePath = z.string().min(1).max(4096).describe('Path relative to the configured root directory.');
+const TextContent = z.string().max(MAX_TEXT_FILE_BYTES);
 
 const schemas = {
   list_directory: z.object({
-    path: z.string().default('.').describe('Path relative to the configured root directory.'),
+    path: z.string().max(4096).default('.').describe('Path relative to the configured root directory.'),
     limit: z.number().int().min(1).max(500).default(200)
   }),
   read_file: z.object({ path: FilePath }),
-  write_file: z.object({ path: FilePath, content: z.string() }),
+  write_file: z.object({ path: FilePath, content: TextContent }),
   edit_file: z.discriminatedUnion('operation', [
-    z.object({ path: FilePath, operation: z.literal('overwrite'), content: z.string() }),
-    z.object({ path: FilePath, operation: z.literal('replace_lines'), startLine: z.number().int().min(1), endLine: z.number().int().min(1), lines: z.array(z.string()) }),
-    z.object({ path: FilePath, operation: z.literal('replace_characters'), start: z.object({ line: z.number().int().min(1), column: z.number().int().min(1) }), end: z.object({ line: z.number().int().min(1), column: z.number().int().min(1) }), content: z.string() })
+    z.object({ path: FilePath, operation: z.literal('overwrite'), content: TextContent }),
+    z.object({ path: FilePath, operation: z.literal('replace_lines'), startLine: z.number().int().min(1), endLine: z.number().int().min(1), lines: z.array(z.string().max(65_536)).max(10_000) }),
+    z.object({ path: FilePath, operation: z.literal('replace_characters'), start: z.object({ line: z.number().int().min(1), column: z.number().int().min(1) }), end: z.object({ line: z.number().int().min(1), column: z.number().int().min(1) }), content: TextContent })
   ])
 };
 

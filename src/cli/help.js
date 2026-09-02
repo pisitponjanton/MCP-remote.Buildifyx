@@ -18,6 +18,8 @@ Manage instances:
   bdxa ps                      Alias for bdxa ls
   bdxa inspect <name|id>       Show instance details
   bdxa attach <name|id>        Open the full dashboard for a running instance
+  bdxa restart <name|id...>    Restart background instances and keep their settings
+  bdxa restart --all           Restart every running background instance
   bdxa rm <name|id...>         Stop/remove instances and reset their local settings
   bdxa rm -f <name|id...>      Force-exit through the verified local control channel
   bdxa rm --all                Remove all instances and reset their local settings
@@ -28,6 +30,7 @@ Account and maintenance:
   bdxa status                  Check device authentication status
   bdxa doctor                  Check the local agent environment
   bdxa update                  Update Buildifyx Desktop Agent from npm
+  bdxa update --restart        Update, then restart all background instances
   bdxa help                    Show this help message
 
 Options:

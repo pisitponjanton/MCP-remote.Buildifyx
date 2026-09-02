@@ -228,14 +228,14 @@ async function startDetached({ root, name, instanceId, unrestrictedCommands, cre
   console.log(`  Log        ${logPath}`);
 }
 
-export async function runCloud(args) {
+export async function runCloud(args, { metadata: suppliedMetadata, updateStatus = null } = {}) {
   const credentials = await ensureCredentials();
   const root = await resolveRoot(getOption(args, '--root', process.cwd()));
   const unrestrictedCommands = hasFlag(args, '--unrestricted-commands') || hasFlag(args, '--full-access');
   const backgroundChild = hasFlag(args, '--background-child');
   const handoffChild = hasFlag(args, '--handoff-child');
   const detach = hasFlag(args, '-d') || hasFlag(args, '--detach');
-  const metadata = await getPackageMetadata();
+  const metadata = suppliedMetadata ?? await getPackageMetadata();
   const suppliedInstanceId = getOption(args, '--instance-id', null);
   const suppliedInstanceName = getOption(args, '--instance-name', null);
   const requestedName = suppliedInstanceName ?? getOption(args, '--name', null);
@@ -328,6 +328,7 @@ export async function runCloud(args) {
 
   const dashboardSnapshot = () => ({
     version: metadata.version,
+    updateStatus,
     root,
     instanceId,
     instanceName: name,
@@ -485,7 +486,9 @@ export async function runCloud(args) {
   };
 
   if (!useTui) {
-    console.log('Buildifyx Desktop Agent\n');
+    console.log('Buildifyx Desktop Agent');
+    console.log(`Version v${metadata.version}`);
+    console.log('');
     console.log('● Starting');
     console.log(`  Instance   ${name} (${shortInstanceId(instanceId)})`);
     console.log(`  Workspace  ${root}`);
@@ -505,6 +508,7 @@ export async function runCloud(args) {
     approvalQueue: runtime.approvalQueue,
     policyManager,
     version: metadata.version,
+    updateStatus,
     root,
     instanceId,
     instanceName: name,

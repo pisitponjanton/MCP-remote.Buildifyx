@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, open, readFile, readdir, readlink, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, readdir, readlink, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -12,8 +12,7 @@ import { buildifyxHome } from './home.js';
 
 export const DEFAULT_INSTANCES_DIR = path.join(buildifyxHome(), 'instances');
 const PACKAGE_NAME = '@buildifyx/desktop-agent';
-const MANAGEMENT_COMMANDS = new Set(['login', 'logout', 'status', 'ls', 'ps', 'inspect', 'attach', 'rm', 'doctor', 'd', 'update', 'u', 'help', '-h', '--help', '-v', '--version', 'local', 'remote', 'r']);
-
+const MANAGEMENT_COMMANDS = new Set(['login', 'logout', 'status', 'ls', 'ps', 'inspect', 'attach', 'restart', 'rm', 'doctor', 'd', 'update', 'u', 'help', '-h', '--help', '-v', '--version', 'local', 'remote', 'r']);
 function isDefaultInstancesDirectory(directory) {
   if (process.env.BUILDFYX_HOME?.trim()) return false;
   return path.resolve(directory) === path.resolve(DEFAULT_INSTANCES_DIR);
@@ -88,12 +87,13 @@ async function describeLiveness(record) {
   const pidAlive = isProcessAlive(record.pid);
   const verified = pidAlive ? await probeInstanceControl(record, { timeoutMs: 250 }) : false;
   const starting = !verified && isStartingGrace(record);
+  const inactiveStatus = record.status === 'restart_failed' ? 'restart_failed' : 'exited';
   return {
     ...record,
     pidAlive,
     verified,
     live: verified || starting,
-    status: verified || starting ? (record.status ?? 'running') : 'exited'
+    status: verified || starting ? (record.status ?? 'running') : inactiveStatus
   };
 }
 
@@ -506,9 +506,10 @@ export async function findInstance(identifier, directory = DEFAULT_INSTANCES_DIR
   throw new Error(`Instance "${needle}" was not found.`);
 }
 
-export async function openInstanceLog(instanceId) {
-  await mkdir(DEFAULT_INSTANCES_DIR, { recursive: true });
-  const filePath = instanceLogFile(instanceId);
-  const handle = await open(filePath, 'a');
+export async function openInstanceLog(instanceId, directory = DEFAULT_INSTANCES_DIR) {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const filePath = instanceLogFile(instanceId, directory);
+  const handle = await open(filePath, 'a', 0o600);
+  await chmod(filePath, 0o600).catch(() => undefined);
   return { filePath, handle };
 }

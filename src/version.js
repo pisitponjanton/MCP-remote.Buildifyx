@@ -109,3 +109,23 @@ export async function checkForUpdate(packageName, currentVersion, options) {
     };
   }
 }
+
+export function formatUpdateNotice(status) {
+  if (!status?.updateAvailable || !status.latestVersion) return null;
+  return `Update available: v${status.currentVersion} → v${status.latestVersion}. Run \`bdxa update\`.`;
+}
+
+export function resolveAttachedUpdateStatus({ runningVersion, installedVersion, updateStatus = null } = {}) {
+  const restartRequired = Boolean(
+    runningVersion
+    && installedVersion
+    && compareVersions(installedVersion, runningVersion) === 1
+  );
+
+  return {
+    ...(updateStatus ?? {}),
+    runningVersion: runningVersion ?? installedVersion ?? null,
+    installedVersion: installedVersion ?? runningVersion ?? null,
+    restartRequired
+  };
+}

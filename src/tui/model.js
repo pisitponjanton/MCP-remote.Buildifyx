@@ -17,15 +17,17 @@ export function groupActivities(events) {
   const groups = new Map();
 
   for (const event of events) {
-    if (!event.requestId || event.type.startsWith('permission.')) continue;
+    if (!event.requestId) continue;
     if (!groups.has(event.requestId)) groups.set(event.requestId, []);
     groups.get(event.requestId).push(event);
   }
 
   return [...groups.entries()]
     .map(([requestId, items]) => {
-      const started = items.find((event) => event.type === 'tool.started');
-      if (!started) return null;
+      const startedEvent = items.find((event) => event.type === 'tool.started');
+      const toolEvent = startedEvent ?? items.find((event) => typeof event.tool === 'string' && event.tool);
+      if (!toolEvent) return null;
+      const started = startedEvent ?? { ...toolEvent, type: 'tool.started', input: {} };
       const completed = items.find((event) => event.type === 'tool.completed');
       const failed = items.find((event) => event.type === 'tool.failed');
       const permission = items.find((event) => event.type === 'permission.evaluated');

@@ -1,12 +1,22 @@
 import WebSocket from 'ws';
 import { normalizeError } from '../core/errors.js';
+import { parseMcpToolInput } from './mcp/tools/registry.js';
 
 export const DEFAULT_CLOUD_ORIGIN = 'https://bdxa.buildifyx.com';
 export const AGENT_PROTOCOL_VERSION = 2;
+export const MAX_CLOUD_FRAME_BYTES = 4 * 1024 * 1024;
+function isLoopbackHostname(hostname) {
+  const value = String(hostname ?? '').toLowerCase();
+  return value === 'localhost' || value.endsWith('.localhost') || value === '::1' || value === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(value);
+}
 
 export function normalizeCloudOrigin(value = DEFAULT_CLOUD_ORIGIN) {
   const url = new URL(value);
   if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Cloud URL must use http or https.');
+  if (url.username || url.password) throw new Error('Cloud URL must not include embedded credentials.');
+  if (url.protocol === 'http:' && !isLoopbackHostname(url.hostname)) {
+    throw new Error('Cloud URL must use https. Plain http is allowed only for localhost development endpoints.');
+  }
   url.pathname = url.pathname.replace(/\/+$/, '');
   url.search = '';
   url.hash = '';
@@ -144,7 +154,8 @@ export function createCloudAgent({
 
     eventBus?.emit('cloud.tool.received', { requestId: message.requestId, tool: message.tool, instanceId: instance.instanceId });
     try {
-      const result = await runtime.dispatch(message.tool, message.arguments ?? {}, { requestId: message.requestId });
+      const input = parseMcpToolInput(message.tool, message.arguments ?? {});
+      const result = await runtime.dispatch(message.tool, input, { requestId: message.requestId });
       safeSend(socket, { type: 'tool.result', requestId: message.requestId, instanceId: instance.instanceId, result });
     } catch (error) {
       const normalized = normalizeError(error);
@@ -162,6 +173,7 @@ export function createCloudAgent({
     if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
     setState({ status: 'connecting', endpoint, lastError: null });
     socket = new WebSocket(endpoint, {
+      maxPayload: MAX_CLOUD_FRAME_BYTES,
       headers: {
         authorization: `Bearer ${credentials.deviceToken}`,
         'user-agent': `buildifyx-desktop-agent/${version}`

@@ -5,7 +5,7 @@ Buildifyx Desktop Agent (`bdxa`) connects one or more local workspaces to Buildi
 Current package:
 
 ```text
-@buildifyx/desktop-agent@0.2.0
+@buildifyx/desktop-agent@0.2.1
 ```
 
 Default cloud:
@@ -122,7 +122,17 @@ Open the full dashboard of a running instance:
 bdxa attach backend
 ```
 
-`bdxa attach` mirrors the same Activity, Cloud status, Permissions, Allowed Roots, Command Rules, Diagnostics, and Approval state owned by that running instance. Changes made from the attached dashboard are applied only to that instance's policy. `Ctrl+C` detaches the dashboard without stopping the agent; use `bdxa rm` to stop the instance.
+`bdxa attach` mirrors the same Activity, Cloud status, Permissions, Allowed Roots, Command Rules, Diagnostics, and Approval state owned by that running instance. Changes made from the attached dashboard are applied only to that instance's policy. `Ctrl+C` detaches the dashboard without stopping the agent; use `bdxa restart` to reload a background instance with the currently installed package, or `bdxa rm` to stop and remove it.
+
+Restart one or more background instances without deleting their `instanceId`-scoped Permissions, Allowed Roots, or Command Rules:
+
+```bash
+bdxa restart backend
+bdxa restart frontend backend
+bdxa restart --all
+```
+
+`bdxa restart --all` restarts every running background instance and skips foreground instances, which should be restarted from their own terminal. Restart refuses an instance while a tool request or approval is still active. A successful restart reuses the same `instanceId`, name, workspace, log path, command-scope mode, and instance-scoped policy while launching the replacement process from the currently installed bdxa package. If the replacement cannot become ready after the old process stops, bdxa preserves the instance record, log path, and policy with a restart failure state so the instance can still be inspected and explicitly removed.
 
 Stop and remove one or more instances:
 
@@ -227,7 +237,7 @@ Buildifyx Cloud 0.2 remains backward-compatible with bdxa 0.1 agents. An agent w
 The local agent remains the final permission authority. Available profiles are:
 
 ```text
-Auto
+Detached instances keep ASK requests pending. `bdxa attach <name|id>` opens the full workspace dashboard, including the normal approval UI, so the request can be resolved without restarting the agent. Outside-workspace scope and the requested operation are evaluated as separate permission gates, so approving a location does not implicitly approve a denied write or a dangerous/custom command; a request may require a second approval for the operation itself. Cloud request timeouts send `tool.cancel` back to bdxa, and cancellation is retained across sequential permission gates so approving an earlier gate later cannot revive a timed-out request.
 Read only
 Allow all
 Custom
@@ -290,6 +300,8 @@ Shows device authentication/Cloud reachability and the number of active local in
 
 The foreground TUI also follows the real Cloud state and displays connecting, connected, reconnecting, disconnected, or revoked rather than assuming the socket is connected.
 
+`RECENT ACTIVITY` shows the MCP tool name for each request, follows the newest request while the user is already at the end of the list, and keeps the selected request stable while older activity is being inspected. The header always shows the running agent version. If a newer npm version exists, the dashboard shows an update notice with `bdxa update`. When `bdxa attach` connects to an older background agent while a newer package is already installed, the dashboard asks the user to restart that instance. Very small terminal windows fall back to a compact status view instead of forcing bordered panels beyond the available rows.
+
 ## Logout
 
 ```bash
@@ -300,9 +312,14 @@ Logout revokes the device credential, so all instances using that credential los
 
 ## Update
 
+Most user-facing bdxa commands check the npm registry at startup. The check is skipped for `bdxa update`, `bdxa doctor`, and internal background/handoff child processes. If the installed version is older than the current npm `latest`, CLI commands print an update warning and the interactive dashboard shows the available version.
+
 ```bash
 bdxa update
+bdxa update --restart
 ```
+
+`bdxa update` installs the latest public package globally. `bdxa update --restart` performs the update and then restarts every running background instance so it launches from the installed package version; foreground instances are skipped. Set `BUILDIFYX_SKIP_UPDATE_CHECK=1` only when an automated or offline environment must skip the startup version check.
 
 ## Useful commands
 
@@ -314,6 +331,8 @@ bdxa ls
 bdxa ls -q
 bdxa attach backend
 bdxa inspect backend
+bdxa restart backend
+bdxa restart --all
 bdxa rm backend
 bdxa rm frontend backend
 bdxa rm $(bdxa ls)
@@ -321,6 +340,7 @@ bdxa rm --all
 bdxa status
 bdxa doctor
 bdxa update
+bdxa update --restart
 bdxa --version
 ```
 
@@ -329,9 +349,13 @@ bdxa --version
 - Buildifyx Cloud does not bypass the local permission system.
 - Device credentials are separate from login tokens.
 - Each v0.2 process has a separate instance identity and workspace root.
-- Cloud routes each request to one explicit instance; it does not broadcast requests across workspaces.
+- Tool arguments received from Cloud are validated again by the local Agent before permission evaluation or execution.
+- Outside-workspace scope and operation permissions are independent gates; allowing a location cannot override a denied write, command, or dangerous-operation policy.
+- Remote Cloud origins must use HTTPS/WSS. Plain HTTP/WS is accepted only for loopback development endpoints such as `localhost` and `127.0.0.1`.
+- Tool arguments received from Cloud are validated again by the local Agent before permission evaluation or execution.
 - `bdxa rm` verifies a local instance control channel instead of trusting a stale PID record.
-- Local instance metadata and policy files are written with restricted file permissions where supported.
+- Local credentials, policies, instance metadata, audit logs, and detached instance logs use restricted local file permissions where supported.
 - Commands execute without a shell unless a supported executable itself starts one.
+- Restricted Git commands still require approval when options can invoke external helpers, pagers, text conversion, or write command output to a file.
 - File access is constrained by configured roots and path checks.
 - Keep `~/.buildifyx/credentials.json` private.

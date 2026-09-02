@@ -9,6 +9,12 @@ export const MAX_TIMEOUT_MS = 60_000;
 
 const RESTRICTED_COMMANDS = new Set(['git', 'npm', 'pnpm', 'yarn']);
 
+function compactArgs(args) {
+  const shown = args.slice(0, 12).map((arg) => arg.length <= 160 ? arg : `${arg.slice(0, 160)}…<${arg.length - 160} more chars>`);
+  if (args.length > shown.length) shown.push(`<${args.length - shown.length} more args>`);
+  return shown;
+}
+
 function validateExecutableName(command) {
   if (command.includes('/') || command.includes('\\') || path.basename(command) !== command) {
     throw new Error('Command must be an executable name, not a path.');
@@ -69,7 +75,7 @@ export function createCommandService({ root, fullAccess = false }) {
     context.eventBus?.emit('process.started', {
       requestId: context.requestId,
       command,
-      args,
+      args: compactArgs(args),
       cwd: resolvedCwd,
       sandboxed: false
     });

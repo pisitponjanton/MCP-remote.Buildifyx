@@ -1,13 +1,18 @@
+import { spawn } from 'node:child_process';
 import { rm as removeFile } from 'node:fs/promises';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { resetInstancePolicy } from '../../permissions/store.js';
 import { runAttachedDashboard } from '../../tui/remote.js';
 import { requestInstanceControl } from '../../utils/instance-control.js';
 import {
+  claimInstanceName,
   findInstance,
   listInstances,
+  openInstanceLog,
   releaseInstanceName,
   removeInstanceRecord,
+  saveInstance,
   shortInstanceId,
   terminateRecoveredProcess
 } from '../../utils/instances.js';
@@ -19,7 +24,10 @@ function pad(value, width) {
 
 function displayStatus(instance) {
   if (instance.processOnly) return 'orphan';
-  if (!instance.live) return instance.pidAlive ? 'stale' : 'exited';
+  if (!instance.live) {
+    if (instance.status === 'restart_failed') return 'restart_failed';
+    return instance.pidAlive ? 'stale' : 'exited';
+  }
   if (instance.status === 'connected') return 'online';
   if (instance.status === 'reconnecting' || instance.status === 'connecting') return instance.status;
   return instance.status ?? 'running';
@@ -81,12 +89,12 @@ export async function runInstanceInspect(args) {
   else if (!instance.live && instance.pidAlive) console.log('Warning    PID exists, but it is not verified as this bdxa instance.');
 }
 
-export async function runInstanceAttach(args) {
+export async function runInstanceAttach(args, { metadata = null, updateStatus = null } = {}) {
   const instance = await findInstance(args[0]);
   if (instance.processOnly) throw new Error(`Instance "${instance.name}" is a recovered legacy orphan. Remove and restart it before attaching.`);
   if (!instance.live) throw new Error(`Instance "${instance.name}" is not running.`);
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('`bdxa attach` requires an interactive terminal.');
-  await runAttachedDashboard(instance);
+  await runAttachedDashboard(instance, { metadata, updateStatus });
 }
 
 async function waitUntilGone(identifier, timeoutMs = 3000) {
@@ -105,6 +113,166 @@ async function waitUntilGone(identifier, timeoutMs = 3000) {
   } catch {
     return true;
   }
+}
+
+
+async function waitUntilLive(identifier, expectedPid, timeoutMs = 8000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const current = await findInstance(identifier);
+      if (current.live && current.verified && (!expectedPid || current.pid === expectedPid)) return current;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Restarted instance "${identifier}" did not become ready in time.`);
+}
+
+
+function restartReadyTimeoutMs() {
+  const configured = Number(process.env.BUILDFYX_RESTART_READY_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured >= 100 && configured <= 30_000 ? configured : 8000;
+}
+
+function dashboardHasActiveWork(dashboard) {
+  if ((dashboard.approvals?.length ?? 0) > 0) return true;
+  const active = new Set();
+  for (const event of dashboard.events ?? []) {
+    if (!event.requestId) continue;
+    if (event.type === 'tool.started') active.add(event.requestId);
+    if (event.type === 'tool.completed' || event.type === 'tool.failed') active.delete(event.requestId);
+  }
+  return active.size > 0;
+}
+
+async function restartBackgroundInstance(instance) {
+  if (instance.processOnly) throw new Error(`Instance "${instance.name}" is a recovered legacy orphan and cannot be restarted safely.`);
+  if (!instance.live) throw new Error(`Instance "${instance.name}" is not running.`);
+  if (instance.mode !== 'background') throw new Error(`Instance "${instance.name}" is foreground. Restart it from its own terminal.`);
+
+  const snapshot = await requestInstanceControl(instance, 'dashboard.snapshot', { timeoutMs: 1500 });
+  if (!snapshot?.ok || !snapshot.dashboard) throw new Error(`Could not read restart settings from "${instance.name}".`);
+  if (dashboardHasActiveWork(snapshot.dashboard)) {
+    throw new Error(`Instance "${instance.name}" has an active or pending request. Wait for it to finish before restarting.`);
+  }
+  const unrestrictedCommands = String(snapshot.dashboard.accessMode ?? '').startsWith('Unrestricted');
+
+  const shutdown = await requestInstanceControl(instance, 'shutdown', { timeoutMs: 1500 });
+  if (!shutdown?.ok || shutdown.instanceId !== instance.instanceId) {
+    throw new Error(`Could not safely stop "${instance.name}" before restart.`);
+  }
+  if (!(await waitUntilGone(instance.instanceId, 5000))) {
+    throw new Error(`Instance "${instance.name}" did not stop before restart.`);
+  }
+
+  const script = fileURLToPath(new URL('../../cli.js', import.meta.url));
+  let logPath = instance.logPath ?? null;
+  let handle = null;
+  let child = null;
+
+  const restartRecord = (status, lastError = null, pid = 0) => ({
+    instanceId: instance.instanceId,
+    name: instance.name,
+    workspace: instance.workspace,
+    mode: 'background',
+    pid,
+    status,
+    startedAt: instance.startedAt ?? new Date().toISOString(),
+    agentVersion: instance.agentVersion ?? null,
+    deviceName: instance.deviceName ?? null,
+    ...(logPath ? { logPath } : {}),
+    ...(lastError ? { lastError } : {})
+  });
+
+  const preserveFailure = async (error) => {
+    await saveInstance(restartRecord('restart_failed', error?.message ?? String(error), child?.pid ?? 0)).catch(() => undefined);
+    await releaseInstanceName(instance.name, instance.instanceId).catch(() => undefined);
+  };
+
+  try {
+    await releaseInstanceName(instance.name, instance.instanceId).catch(() => undefined);
+    await claimInstanceName(instance.workspace, instance.name, instance.instanceId);
+    const opened = await openInstanceLog(instance.instanceId);
+    logPath = opened.filePath;
+    handle = opened.handle;
+    await saveInstance(restartRecord('starting'));
+
+    const childArgs = [
+      script,
+      '--root', instance.workspace,
+      '--instance-id', instance.instanceId,
+      '--instance-name', instance.name,
+      '--background-child'
+    ];
+    if (unrestrictedCommands) childArgs.push('--unrestricted-commands');
+
+    child = spawn(process.execPath, childArgs, {
+      detached: true,
+      stdio: ['ignore', handle.fd, handle.fd],
+      windowsHide: true,
+      env: process.env
+    });
+    if (!child.pid) throw new Error('Could not start replacement bdxa process.');
+    child.unref();
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    await preserveFailure(error);
+    throw new Error(`Restart failed after stopping "${instance.name}": ${error.message}. The instance record and policy were preserved for inspection and cleanup.`);
+  }
+
+  await handle.close();
+
+  try {
+    return await waitUntilLive(instance.instanceId, child.pid, restartReadyTimeoutMs());
+  } catch (error) {
+    try { child.kill('SIGTERM'); } catch {}
+    await preserveFailure(error);
+    throw new Error(`${error.message} The instance record and policy were preserved for inspection and cleanup.`);
+  }
+}
+
+export async function runInstanceRestart(args = []) {
+  const restartAll = args.includes('-a') || args.includes('--all');
+  let identifiers = args.filter((arg) => !['-a', '--all'].includes(arg));
+
+  if (restartAll) {
+    const instances = await listInstances();
+    identifiers = instances.filter((item) => item.live).map((item) => item.instanceId);
+  }
+  if (!identifiers.length) {
+    if (restartAll) {
+      console.log('No running background instances to restart.');
+      return;
+    }
+    throw new Error('Usage: bdxa restart [--all] <name|id> [name|id ...]');
+  }
+
+  const failures = [];
+  const handled = new Set();
+  let restarted = 0;
+  let skipped = 0;
+  for (const identifier of identifiers) {
+    let instance;
+    try {
+      instance = await findInstance(identifier);
+      if (handled.has(instance.instanceId)) continue;
+      handled.add(instance.instanceId);
+      if (restartAll && instance.mode !== 'background') {
+        console.log(`↷ Skipped ${instance.name} (foreground)`);
+        skipped += 1;
+        continue;
+      }
+      const next = await restartBackgroundInstance(instance);
+      console.log(`✓ Restarted ${next.name} (${shortInstanceId(next.instanceId)}) · v${next.agentVersion ?? 'unknown'}`);
+      restarted += 1;
+    } catch (error) {
+      if (!restartAll) throw error;
+      failures.push(`${instance?.name ?? identifier}: ${error.message}`);
+    }
+  }
+
+  if (restartAll && restarted === 0 && skipped === 0 && failures.length === 0) console.log('No running background instances to restart.');
+  if (failures.length) throw new Error(`Some instances could not be restarted: ${failures.join('; ')}`);
 }
 
 async function cleanupInstance(instance) {

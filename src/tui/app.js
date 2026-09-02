@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import { detectProfile, PROFILES } from './profiles.js';
 import { groupActivities, shortTime, statusColor, statusGlyph } from './model.js';
@@ -26,10 +26,10 @@ function title(text) {
 
 function approvalChoices(request) {
   const choices = [{ label: 'Allow once', action: 'allow', remember: null }];
-  if (request.toolName === 'run_command') {
-    choices.push({ label: 'Always allow this command', action: 'allow', remember: 'command' });
-  } else if (request.pathInfo?.scope === 'outside') {
+  if (request.category === 'outsideRoot' && request.pathInfo?.scope === 'outside') {
     choices.push({ label: 'Always allow this location', action: 'allow', remember: 'root' });
+  } else if (request.toolName === 'run_command') {
+    choices.push({ label: 'Always allow this command', action: 'allow', remember: 'command' });
   }
   choices.push({ label: 'Deny', action: 'deny', remember: null });
   return choices;
@@ -43,7 +43,7 @@ function approvalImpact(request) {
   return request.evaluation?.reason ?? request.category;
 }
 
-function Header({ version, root, instanceName, instanceId, mode, profile, pendingCount, connectionStatus, layout }) {
+function Header({ version, root, instanceName, instanceId, mode, profile, pendingCount, connectionStatus, updateStatus }) {
   const connection = pendingCount
     ? `● APPROVAL ${pendingCount}`
     : connectionStatus === 'connected'
@@ -57,16 +57,23 @@ function Header({ version, root, instanceName, instanceId, mode, profile, pendin
             : '◐ CONNECTING';
   const access = `${PROFILES[profile].label} · ${mode}`;
   const shortId = String(instanceId ?? '').replace(/^inst_/, '').slice(0, 8);
+  const latestVersion = updateStatus?.updateAvailable ? updateStatus.latestVersion : null;
+  const updateLine = updateStatus?.restartRequired
+    ? `Restart    running v${updateStatus.runningVersion ?? version} · installed v${updateStatus.installedVersion ?? version} · bdxa restart ${shortId || instanceName}`
+    : latestVersion
+      ? `Update     v${version} → v${latestVersion} · run bdxa update`
+      : null;
 
   return h(Box, { flexDirection: 'column', marginBottom: 1 },
     h(Box, { justifyContent: 'space-between' },
-      h(Text, { bold: true }, `Buildifyx Desktop Agent${layout.narrow ? '' : `  v${version}`}`),
+      h(Text, { bold: true, wrap: 'truncate-end' }, 'Buildifyx Desktop Agent'),
       h(Text, { bold: true }, connection)
     ),
-    layout.narrow ? h(Text, { dimColor: true }, `v${version}`) : null,
-    h(Text, null, `Instance   ${instanceName}${shortId ? ` · ${shortId}` : ''}`),
+    h(Text, { wrap: 'truncate-end' }, `Version    v${version}`),
+    h(Text, { wrap: 'truncate-end' }, `Instance   ${instanceName}${shortId ? ` · ${shortId}` : ''}`),
     h(Text, { wrap: 'truncate-end' }, `Workspace  ${root}`),
-    h(Text, null, `Access     ${access}`)
+    h(Text, { wrap: 'truncate-end' }, `Access     ${access}`),
+    updateLine ? h(Text, { color: 'yellow', bold: true, wrap: 'truncate-end' }, updateLine) : null
   );
 }
 
@@ -88,7 +95,7 @@ function ActivityPanel({ activities, selected, layout }) {
               h(Text, { bold: active }, active ? '› ' : '  '),
               h(Text, { dimColor: !active }, `${shortTime(item.started.timestamp)} `),
               h(Text, { color: statusColor(item.status), bold: active }, `${statusGlyph(item.status)} `),
-              h(Text, { bold: active }, item.started.tool)
+              h(Text, { bold: active }, `TOOL ${item.started.tool}`)
             ),
             item.summary ? h(Text, { dimColor: !active, wrap: 'truncate-end' }, `    ${item.summary}`) : null
           );
@@ -96,28 +103,41 @@ function ActivityPanel({ activities, selected, layout }) {
   );
 }
 
-function RequestDetails({ item, compact }) {
+function RequestDetails({ item, compact, maxRows = Number.POSITIVE_INFINITY }) {
   if (!item) return h(Text, { dimColor: true }, 'No request selected yet.');
   const resourceLimit = compact ? 3 : 7;
   const resources = item.resources.slice(-resourceLimit);
-
-  return h(Box, { flexDirection: 'column' },
-    h(Text, null, `Tool:       ${item.started.tool}`),
-    item.summary ? h(Text, { wrap: 'truncate-end' }, `Request:    ${item.summary}`) : null,
-    h(Text, null, `Status:     ${item.status.toUpperCase()}`),
-    item.permission ? h(Text, null, `Permission: ${item.permission.category} → ${item.permission.decision}`) : null,
-    item.process ? h(Text, { wrap: 'truncate-end' }, `Command:    ${item.process.command} ${(item.process.args ?? []).join(' ')}`) : null,
-    item.process ? h(Text, { wrap: 'truncate-end' }, `Cwd:        ${item.process.cwd}`) : null,
+  const lines = [
+    h(Text, { key: 'tool', wrap: 'truncate-end' }, `Tool:       ${item.started.tool}`),
+    h(Text, { key: 'status', wrap: 'truncate-end' }, `Status:     ${item.status.toUpperCase()}`),
+    item.summary ? h(Text, { key: 'request', wrap: 'truncate-end' }, `Request:    ${item.summary}`) : null,
+    item.permission ? h(Text, { key: 'permission', wrap: 'truncate-end' }, `Permission: ${item.permission.category} → ${item.permission.decision}`) : null,
+    item.process ? h(Text, { key: 'command', wrap: 'truncate-end' }, `Command:    ${item.process.command} ${(item.process.args ?? []).join(' ')}`) : null,
+    item.process ? h(Text, { key: 'cwd', wrap: 'truncate-end' }, `Cwd:        ${item.process.cwd}`) : null,
     ...resources.map((resource) => h(Text, { key: resource.id, wrap: 'truncate-end' }, `${String(resource.operation).toUpperCase().padEnd(11)} ${resource.path}`)),
-    item.resources.length > resources.length ? h(Text, { dimColor: true }, `… ${item.resources.length - resources.length} more resources`) : null,
-    item.completed ? h(Text, null, `Duration:   ${item.completed.durationMs} ms`) : null,
-    item.failed ? h(Text, null, `Error:      ${item.failed.error?.code ?? 'ERROR'}`) : null,
-    item.failed && !compact ? h(Text, { wrap: 'wrap' }, `            ${item.failed.error?.message ?? 'Request failed'}`) : null
-  );
+    item.resources.length > resources.length ? h(Text, { key: 'resources-more', dimColor: true, wrap: 'truncate-end' }, `… ${item.resources.length - resources.length} more resources`) : null,
+    item.completed ? h(Text, { key: 'duration', wrap: 'truncate-end' }, `Duration:   ${item.completed.durationMs} ms`) : null,
+    item.failed ? h(Text, { key: 'error', wrap: 'truncate-end' }, `Error:      ${item.failed.error?.code ?? 'ERROR'}`) : null,
+    item.failed && !compact ? h(Text, { key: 'error-message', wrap: 'truncate-end' }, `            ${item.failed.error?.message ?? 'Request failed'}`) : null
+  ].filter(Boolean);
+  const limit = Math.max(1, maxRows);
+  const visible = lines.length <= limit ? lines : [...lines.slice(0, Math.max(0, limit - 1)), h(Text, { key: 'details-more', dimColor: true }, '… more details')];
+  return h(Box, { flexDirection: 'column' }, ...visible);
 }
 
-function ApprovalPanel({ request, selected, attached = false }) {
+function ApprovalPanel({ request, selected, attached = false, compact = false }) {
   const choices = approvalChoices(request);
+  const choiceLines = choices.map((choice, index) => h(Text, { key: choice.label, bold: selected === index, wrap: 'truncate-end' }, `${selected === index ? '›' : ' '} ${choice.label}`));
+  if (compact) {
+    return h(Box, { flexDirection: 'column' },
+      h(Text, { bold: true }, 'APPROVAL REQUIRED'),
+      h(Text, { bold: true, wrap: 'truncate-end' }, request.description),
+      request.pathInfo ? h(Text, { wrap: 'truncate-end' }, `Location  ${request.pathInfo.resolved}`) : null,
+      h(Text, { dimColor: true, wrap: 'truncate-end' }, approvalImpact(request)),
+      ...choiceLines,
+      h(Text, { dimColor: true, wrap: 'truncate-end' }, `↑↓ Select  Enter Confirm  Q Deny  Ctrl+C ${attached ? 'Detach' : 'Stop'}`)
+    );
+  }
   return h(Box, { flexDirection: 'column' },
     h(Text, { bold: true }, 'APPROVAL REQUIRED'),
     h(Text, null, ''),
@@ -125,17 +145,18 @@ function ApprovalPanel({ request, selected, attached = false }) {
     request.pathInfo ? h(Text, { wrap: 'truncate-end' }, `Location  ${request.pathInfo.resolved}`) : null,
     h(Text, { dimColor: true, wrap: 'wrap' }, approvalImpact(request)),
     h(Text, null, ''),
-    ...choices.map((choice, index) => h(Text, { key: choice.label, bold: selected === index }, `${selected === index ? '›' : ' '} ${choice.label}`)),
+    ...choiceLines,
     h(Text, null, ''),
     h(Text, { dimColor: true }, `↑↓ Select   Enter Confirm   Q Back/Deny   Ctrl+C ${attached ? 'Detach' : 'Stop'}`)
   );
 }
 
 function StatusPanel({ selectedItem, request, approvalSelected, layout, attached = false }) {
+  const detailRows = Math.max(1, layout.panelHeight - 3);
   return h(Box, { width: layout.statusWidth, borderStyle: 'classic', paddingX: 1, flexDirection: 'column', height: layout.panelHeight },
     request
-      ? h(ApprovalPanel, { request, selected: approvalSelected, attached })
-      : h(React.Fragment, null, title('DETAILS'), h(RequestDetails, { item: selectedItem, compact: layout.compact }))
+      ? h(ApprovalPanel, { request, selected: approvalSelected, attached, compact: layout.compact })
+      : h(React.Fragment, null, title('DETAILS'), h(RequestDetails, { item: selectedItem, compact: layout.compact, maxRows: detailRows }))
   );
 }
 
@@ -266,9 +287,9 @@ async function applyProfile(policyManager, profileKey) {
   for (const [category, action] of Object.entries(profile.categories)) await policyManager.setCategory(category, action);
 }
 
-export function App({ eventBus, approvalQueue, policyManager, version, root, instanceId, instanceName, mode, auditPath, toolManifest, toolManifestState, toolsUrl, onQuit, onBackground, attached = false }) {
+export function App({ eventBus, approvalQueue, policyManager, version, updateStatus, root, instanceId, instanceName, mode, auditPath, toolManifest, toolManifestState, toolsUrl, onQuit, onBackground, attached = false }) {
   const { exit } = useApp();
-  const layout = useTuiLayout();
+  const layout = useTuiLayout({ hasUpdate: Boolean(updateStatus?.updateAvailable || updateStatus?.restartRequired) });
   const initialEvents = eventBus.getHistory();
   const initialConnectionStatus = [...initialEvents].reverse().find((event) => event.type === 'cloud.connection')?.status ?? 'connecting';
   const [events, setEvents] = useState(initialEvents);
@@ -276,7 +297,7 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, ins
   const [pending, setPending] = useState(approvalQueue.getPending());
   const [policy, setPolicy] = useState(policyManager.get());
   const [screen, setScreen] = useState('dashboard');
-  const [activitySelected, setActivitySelected] = useState(0);
+  const [activitySelected, setActivitySelected] = useState(() => Math.max(0, groupActivities(initialEvents).length - 1));
   const [permissionSelected, setPermissionSelected] = useState(0);
   const [rootSelected, setRootSelected] = useState(0);
   const [commandSelected, setCommandSelected] = useState(0);
@@ -293,6 +314,9 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, ins
 
   useEffect(() => eventBus.subscribe((event) => {
     setEvents(eventBus.getHistory());
+    if (event.type === 'tool.started') { setMessage(`Running tool: ${event.tool}`); return; }
+    if (event.type === 'tool.completed') { setMessage(`Completed tool: ${event.tool} · ${event.durationMs} ms`); return; }
+    if (event.type === 'tool.failed') { setMessage(`Failed tool: ${event.tool} · ${event.error?.code ?? 'ERROR'}`); return; }
     if (event.type !== 'cloud.connection') return;
     setConnectionStatus(event.status);
     if (event.status === 'connected') setMessage('Connected. Waiting for requests from ChatGPT...');
@@ -305,13 +329,27 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, ins
   useEffect(() => policyManager.subscribe((next) => setPolicy({ ...next, categories: { ...next.categories } })), [policyManager]);
 
   const activities = useMemo(() => groupActivities(events), [events]);
+  const previousActivityCount = useRef(null);
   const profile = detectProfile(policy);
   const request = pending[0] ?? null;
+  const approvalNeedsResize = Boolean(request && layout.panelHeight < 10);
+  const interactionBlocked = layout.tooSmall || approvalNeedsResize;
   const selectedIndex = activities.length ? Math.min(activitySelected, activities.length - 1) : -1;
   const selectedItem = selectedIndex >= 0 ? activities[selectedIndex] : null;
 
   useEffect(() => {
-    if (activities.length && activitySelected === 0) setActivitySelected(activities.length - 1);
+    const previousCount = previousActivityCount.current;
+    if (previousCount === null) {
+      previousActivityCount.current = activities.length;
+      return;
+    }
+    setActivitySelected((value) => {
+      if (!activities.length) return 0;
+      const wasFollowingNewest = previousCount === 0 || value >= previousCount - 1;
+      if (activities.length > previousCount && wasFollowingNewest) return activities.length - 1;
+      return Math.min(value, activities.length - 1);
+    });
+    previousActivityCount.current = activities.length;
   }, [activities.length]);
 
   async function quit() {
@@ -321,7 +359,7 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, ins
 
   useInput(async (input, key) => {
     if (key.ctrl && input.toLowerCase() === 'c') { await quit(); return; }
-
+    if (interactionBlocked) return;
     if (request) {
       const choices = approvalChoices(request);
       if (input === 'q' || input === 'Q') {
@@ -453,6 +491,24 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, ins
   });
 
   const canBackground = !attached && typeof onBackground === 'function';
+  if (interactionBlocked) {
+    const lines = [
+      `Buildifyx Desktop Agent v${version}`,
+      `Status     ${String(connectionStatus).toUpperCase()}`,
+      `Instance   ${instanceName}`,
+      request ? 'Approval   Pending · resize to review before responding' : null,
+      updateStatus?.restartRequired
+        ? `Restart    running v${updateStatus.runningVersion ?? version} · installed v${updateStatus.installedVersion ?? version} · bdxa restart ${String(instanceId ?? instanceName).replace(/^inst_/, '').slice(0, 8)}`
+        : updateStatus?.updateAvailable && updateStatus.latestVersion
+          ? `Update     v${version} → v${updateStatus.latestVersion} · bdxa update`
+          : null,
+      `Terminal   ${layout.columns}x${layout.rows} is too small. Resize to continue.`,
+      message
+    ].filter(Boolean).slice(0, layout.canvasRows);
+    return h(Box, { flexDirection: 'column', width: '100%', height: layout.canvasRows },
+      ...lines.map((line, index) => h(Text, { key: `${index}-${line}`, wrap: 'truncate-end' }, line))
+    );
+  }
   let main;
   if (backgroundConfirm) main = h(BackgroundConfirmScreen, { instanceName, root });
   else if (screen === 'permissions') main = h(PermissionsScreen, { policy, selected: permissionSelected });
@@ -465,8 +521,8 @@ export function App({ eventBus, approvalQueue, policyManager, version, root, ins
     h(StatusPanel, { selectedItem, request, approvalSelected, layout, attached })
   );
 
-  return h(Box, { flexDirection: 'column', width: '100%', height: Math.max(16, layout.rows - 1) },
-    h(Header, { version, root, instanceId, instanceName, mode, profile, pendingCount: pending.length, connectionStatus, layout }),
+  return h(Box, { flexDirection: 'column', width: '100%', height: layout.canvasRows },
+    h(Header, { version, updateStatus, root, instanceId, instanceName, mode, profile, pendingCount: pending.length, connectionStatus }),
     main,
     h(Controls, { screen, inputMode, compact: layout.compact, attached, canBackground, backgroundConfirm }),
     h(Text, { color: message.startsWith('MCP tools changed') ? 'yellow' : 'cyan', wrap: 'truncate-end' }, message)

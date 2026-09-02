@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getCloudEndpoints, normalizeCloudOrigin } from '../../src/transport/cloud.js';
+import { getCloudEndpoints, MAX_CLOUD_FRAME_BYTES, normalizeCloudOrigin } from '../../src/transport/cloud.js';
 
 test('cloud endpoints use Buildifyx production domain by default', () => {
   const endpoints = getCloudEndpoints();
@@ -9,9 +9,23 @@ test('cloud endpoints use Buildifyx production domain by default', () => {
   assert.equal(endpoints.meUrl, 'https://bdxa.buildifyx.com/api/device/me');
   assert.equal(endpoints.logoutUrl, 'https://bdxa.buildifyx.com/api/device/logout');
   assert.equal(endpoints.agentUrl, 'wss://bdxa.buildifyx.com/agent');
+  assert.equal(MAX_CLOUD_FRAME_BYTES, 4 * 1024 * 1024);
 });
 
-test('cloud origin normalization accepts internal http development endpoints', () => {
+test('cloud origin normalization accepts local http development endpoints', () => {
   assert.equal(normalizeCloudOrigin('http://127.0.0.1:8080/'), 'http://127.0.0.1:8080');
+  assert.equal(normalizeCloudOrigin('http://localhost:8080/'), 'http://localhost:8080');
   assert.equal(getCloudEndpoints('http://127.0.0.1:8080').agentUrl, 'ws://127.0.0.1:8080/agent');
+});
+
+test('cloud origin normalization rejects plaintext remote endpoints', () => {
+  assert.throws(
+    () => normalizeCloudOrigin('http://example.com'),
+    /must use https/
+  );
+  assert.throws(
+    () => normalizeCloudOrigin('https://user:pass@example.com'),
+    /must not include embedded credentials/
+  );
+  assert.equal(normalizeCloudOrigin('https://example.com/'), 'https://example.com');
 });

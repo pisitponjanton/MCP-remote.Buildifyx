@@ -3,9 +3,9 @@ import { MAX_OUTPUT_BYTES, MAX_TIMEOUT_MS } from '../../../services/commands.js'
 import { successResult } from '../response.js';
 
 const RunCommandInput = z.object({
-  command: z.string().min(1).describe('Allowed executable name. Paths and shell command strings are not accepted.'),
+  command: z.string().min(1).max(256).describe('Allowed executable name. Paths and shell command strings are not accepted.'),
   args: z.array(z.string().max(4096)).max(128).default([]),
-  cwd: z.string().default('.').describe('Working directory relative to the configured root directory.'),
+  cwd: z.string().max(4096).default('.').describe('Working directory relative to the configured root directory.'),
   timeoutMs: z.number().int().min(100).max(MAX_TIMEOUT_MS).default(15_000)
 });
 

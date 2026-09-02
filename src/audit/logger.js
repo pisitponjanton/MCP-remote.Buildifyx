@@ -1,4 +1,4 @@
-import { mkdir, appendFile } from 'node:fs/promises';
+import { mkdir, open } from 'node:fs/promises';
 import path from 'node:path';
 import { buildifyxHome } from '../utils/home.js';
 
@@ -10,9 +10,15 @@ export function createAuditLogger({ eventBus, filePath = defaultAuditPath(), con
   let unsubscribe;
 
   async function writeEvent(event) {
-    await mkdir(path.dirname(filePath), { recursive: true });
+    await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
     const record = context ? { ...event, instance: context } : event;
-    await appendFile(filePath, `${JSON.stringify(record)}\n`, 'utf8');
+    const handle = await open(filePath, 'a', 0o600);
+    try {
+      await handle.chmod(0o600).catch(() => undefined);
+      await handle.appendFile(`${JSON.stringify(record)}\n`, 'utf8');
+    } finally {
+      await handle.close();
+    }
   }
 
   function start() {
