@@ -5,7 +5,7 @@ Buildifyx Desktop Agent (`bdxa`) connects one or more local workspaces to Buildi
 Current package:
 
 ```text
-@buildifyx/desktop-agent@0.2.1
+@buildifyx/desktop-agent@0.3.0
 ```
 
 Default cloud:
@@ -83,18 +83,18 @@ Background instances can still receive requests that require `ASK`. Use `bdxa at
 
 ## Manage instances
 
-List foreground, background, stale, and reconnecting instances:
+List foreground, background, stopped, stale, and reconnecting instances:
 
 ```bash
 bdxa ls
 ```
 
-`bdxa ps` is an alias. In an interactive terminal, `ls` renders a table:
+`bdxa ps` is an alias. In an interactive terminal, `ls` renders a table including the per-instance autostart state:
 
 ```text
-ID        NAME       WORKSPACE                         MODE        STATUS
-84b01e2c  frontend   /Users/me/projects/frontend       background  online
-21a948af  backend    /Users/me/projects/backend        foreground  online
+ID        NAME       WORKSPACE                         MODE        AUTOSTART  STATUS
+84b01e2c  frontend   /Users/me/projects/frontend       background  no         online
+21a948af  backend    /Users/me/projects/backend        background  yes        stopped
 ```
 
 For scripts, use quiet output:
@@ -103,7 +103,7 @@ For scripts, use quiet output:
 bdxa ls -q
 ```
 
-When stdout is redirected or captured by the shell, plain `bdxa ls` automatically switches to full instance IDs only. This makes Docker-style composition work directly:
+When stdout is redirected or captured by the shell, plain `bdxa ls` automatically switches to full instance IDs only. This keeps Docker-style composition working directly:
 
 ```bash
 bdxa rm $(bdxa ls)
@@ -116,15 +116,30 @@ Inspect one instance by name, full ID, or unique ID prefix:
 bdxa inspect backend
 ```
 
+`bdxa inspect` also shows whether autostart is enabled for that instance.
+
 Open the full dashboard of a running instance:
 
 ```bash
 bdxa attach backend
 ```
 
-`bdxa attach` mirrors the same Activity, Cloud status, Permissions, Allowed Roots, Command Rules, Diagnostics, and Approval state owned by that running instance. Changes made from the attached dashboard are applied only to that instance's policy. `Ctrl+C` detaches the dashboard without stopping the agent; use `bdxa restart` to reload a background instance with the currently installed package, or `bdxa rm` to stop and remove it.
+`bdxa attach` mirrors the same Activity, Cloud status, Permissions, Allowed Roots, Command Rules, Diagnostics, and Approval state owned by that running instance. `Ctrl+C` detaches the dashboard without stopping the agent.
 
-Restart one or more background instances without deleting their `instanceId`-scoped Permissions, Allowed Roots, or Command Rules:
+Stop and start background instances without removing them:
+
+Stop and start background instances without removing them:
+
+```bash
+bdxa stop backend
+bdxa stop frontend backend
+bdxa stop --all
+bdxa start backend
+```
+
+`bdxa stop` stops the process but preserves the same `instanceId`, workspace metadata, local policy, command-scope mode, log, and autostart choice. A stopped background instance remains visible in `bdxa ls`. Use `bdxa start <name|id>` to start it again explicitly. `bdxa restart <name|id>` also works and preserves the same instance identity.
+
+Restart one or more background instances without deleting their `instanceId`-scoped Permissions, Allowed Roots, Command Rules, or autostart choice:
 
 ```bash
 bdxa restart backend
@@ -132,29 +147,42 @@ bdxa restart frontend backend
 bdxa restart --all
 ```
 
-`bdxa restart --all` restarts every running background instance and skips foreground instances, which should be restarted from their own terminal. Restart refuses an instance while a tool request or approval is still active. A successful restart reuses the same `instanceId`, name, workspace, log path, command-scope mode, and instance-scoped policy while launching the replacement process from the currently installed bdxa package. If the replacement cannot become ready after the old process stops, bdxa preserves the instance record, log path, and policy with a restart failure state so the instance can still be inspected and explicitly removed.
+`bdxa restart --all` restarts every currently running background instance and skips foreground or stopped instances. `bdxa restart <name|id>` may also start a stopped background instance. Restart refuses a live instance while a tool request or approval is still active. A successful restart reuses the same `instanceId`, name, workspace, log path, command-scope mode, autostart choice, and instance-scoped policy while launching the replacement process from the currently installed bdxa package.
+Background mode and autostart are separate. `bdxa -d` only runs the process in the background for the current boot/session. New background instances start with autostart **off**.
 
-Stop and remove one or more instances:
+Enable autostart for one specific background instance:
+
+```bash
+bdxa autostart backend
+```
+
+Disable it without stopping the instance:
+
+```bash
+bdxa autostart off backend
+```
+
+Autostart is opt-in and stored per `instanceId` in `~/.buildifyx/autostart.json`. If an autostart-enabled instance is manually stopped, it stays stopped for the current session but is eligible to start again after the next login/reboot. Restarting an instance does not change its autostart choice.
+
+### Remove
+
+Stop and permanently remove one or more instances:
 
 ```bash
 bdxa rm backend
 bdxa rm frontend backend
-```
-
-`bdxa rm` also deletes that instance's local Dashboard policy. A newly created instance always starts from the default Permissions, no additional allowed roots, no custom command rules, and no remembered command/location approvals. Other instances are not changed, even when they use the same workspace root or the same workspace name later.
-
-Remove every local instance and reset each instance's local Dashboard policy:
-
-```bash
 bdxa rm --all
 ```
+
+`bdxa rm` is intentionally different from `bdxa stop`: it removes the instance record, releases its name, deletes its local Dashboard policy, removes its autostart entry, and removes the detached log where applicable. A newly created instance with a new `instanceId` starts from default Permissions, no additional roots, no command rules, and autostart off. Other instances are not changed.
 
 Force-exit through the verified local control channel:
 
 ```bash
 bdxa rm -f backend
 ```
-`rm` does not blindly signal a PID. Every v0.2 instance exposes a local control endpoint and bdxa verifies the instance ID and PID through that endpoint first. If an old record points at a PID that has been reused by another process, bdxa treats the record as stale and does not kill the unrelated process.
+
+`rm` does not blindly signal a PID. Every modern instance exposes a local control endpoint and bdxa verifies the instance identity through that endpoint first. If an old record points at a PID that has been reused by another process, bdxa treats the record as stale and does not kill the unrelated process.
 
 ## Multi-workspace behavior
 
@@ -230,7 +258,21 @@ bdxa 0.2 sends:
 
 Heartbeats and tool results also identify the instance. Cloud tool calls are routed to one specific instance and are never broadcast to every terminal.
 
-Buildifyx Cloud 0.2 remains backward-compatible with bdxa 0.1 agents. An agent without `protocolVersion` / `instanceId` is registered as a legacy v1 connection and continues to use the original single-connection behavior.
+Buildifyx Cloud 0.3 remains backward-compatible with bdxa 0.1 and 0.2 agents. An agent without `protocolVersion` / `instanceId` is registered as a legacy v1 connection and continues to use the original single-connection behavior. The v0.3 management capability is optional, so older agents keep their existing MCP behavior unchanged.
+
+## Web management (v0.3)
+
+bdxa 0.3 can expose authenticated management actions to Buildifyx Cloud for the web console. The Cloud relays semantic actions such as permission changes, allowed-root changes, command-rule changes, instance lifecycle controls, and background autostart; it does not receive direct arbitrary access to local configuration files.
+
+Permissions, additional allowed roots, and command rules remain stored only in the existing instance policy under:
+
+```text
+~/.buildifyx/instance-settings/<settings-id>/policy.json
+```
+
+Management is deliberately separate from MCP tool calls. ChatGPT MCP sessions do not receive tools that change these security settings. Older agents that do not advertise the management capability continue to connect and use their existing MCP tools normally.
+
+Background instances can opt into autostart from the web console. bdxa stores only the local autostart profile under `~/.buildifyx/autostart.json` and installs a user-level startup hook for macOS (`launchd`), Linux (`systemd --user`), or Windows (Startup). Restored instances keep the same `instanceId`, workspace, local policy, and command-scope mode.
 
 ## Permissions
 
@@ -308,7 +350,7 @@ The foreground TUI also follows the real Cloud state and displays connecting, co
 bdxa logout
 ```
 
-Logout revokes the device credential, so all instances using that credential lose Cloud access and shut down their Cloud connection. Use `Ctrl+C` or `bdxa rm` when the goal is only to stop one workspace.
+Logout revokes the device credential, so all instances using that credential lose Cloud access and shut down their Cloud connection. Use `Ctrl+C` for a foreground instance or `bdxa stop <name|id>` for a managed background instance when the goal is only to stop it; use `bdxa rm` only when the instance and its local settings should be removed.
 
 ## Update
 
@@ -331,7 +373,10 @@ bdxa ls
 bdxa ls -q
 bdxa attach backend
 bdxa inspect backend
+bdxa stop backend
+bdxa autostart backend
 bdxa restart backend
+bdxa autostart off backend
 bdxa restart --all
 bdxa rm backend
 bdxa rm frontend backend

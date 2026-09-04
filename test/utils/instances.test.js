@@ -216,6 +216,10 @@ test('process parser recognizes agent invocations and ignores management command
   assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js ls'), null);
   assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js restart --all'), null);
   assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js status'), null);
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js stop backend'), null);
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js autostart backend'), null);
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js autostart off backend'), null);
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js __autostart-restore'), null);
 });
 
 test('process recovery verifies the bdxa package identity before trusting src/cli.js', async () => {

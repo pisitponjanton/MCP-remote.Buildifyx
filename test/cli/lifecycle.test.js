@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -355,6 +355,155 @@ test('local command reports that legacy local MCP mode was removed', async () =>
     assert.match(output().stderr, /Local MCP mode has been removed/);
     assert.doesNotMatch(output().stderr, /Unknown command/);
   } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+async function installAutostartCommandStub(fixture) {
+  const bin = path.join(fixture.home, 'bin');
+  await mkdir(bin, { recursive: true });
+  if (process.platform === 'darwin') {
+    const command = path.join(bin, 'launchctl');
+    await writeFile(command, '#!/bin/sh\nexit 0\n');
+    await chmod(command, 0o755);
+  } else if (process.platform === 'linux') {
+    const command = path.join(bin, 'systemctl');
+    await writeFile(command, '#!/bin/sh\nexit 0\n');
+    await chmod(command, 0o755);
+  }
+  return bin;
+}
+
+test('background stop/restart and per-instance autostart follow Docker-style lifecycle semantics', async () => {
+  const fixture = await setupFixture();
+  const autostartPath = path.join(fixture.buildifyxHome, 'autostart.json');
+  const stubBin = await installAutostartCommandStub(fixture);
+  const toolPath = `${stubBin}${path.delimiter}${process.env.PATH ?? ''}`;
+  let cleanupNeeded = false;
+
+  try {
+    const starter = spawnCli(['-d', '--root', fixture.workspace, '--name', 'lifecycle-v3-test'], fixture);
+    const starterOutput = collect(starter);
+    const [startCode] = await once(starter, 'exit');
+    assert.equal(startCode, 0, starterOutput().stderr);
+    cleanupNeeded = true;
+
+    await waitFor(async () => (await instanceJsonFiles(fixture)).length === 1);
+    const [recordName] = await instanceJsonFiles(fixture);
+    const recordPath = path.join(fixture.buildifyxHome, 'instances', recordName);
+    await waitFor(async () => {
+      try { return Boolean(JSON.parse(await readFile(recordPath, 'utf8')).controlPath); } catch { return false; }
+    });
+    const initial = JSON.parse(await readFile(recordPath, 'utf8'));
+    await assert.rejects(readFile(autostartPath, 'utf8'), (error) => error?.code === 'ENOENT');
+
+    const policyUpdate = await requestInstanceControl(initial, 'policy.setCategory', {
+      timeoutMs: 1500,
+      payload: { category: 'read', action: 'deny' }
+    });
+    assert.equal(policyUpdate.ok, true);
+    const policyPath = instancePolicyPath(initial.instanceId, fixture.buildifyxHome);
+
+    const enable = spawnCli(['autostart', 'lifecycle-v3-test'], fixture, { PATH: toolPath });
+    const enableOutput = collect(enable);
+    const [enableCode] = await once(enable, 'exit');
+    assert.equal(enableCode, 0, enableOutput().stderr);
+    let autostart = JSON.parse(await readFile(autostartPath, 'utf8'));
+    assert.deepEqual(autostart.instances.map((item) => item.instanceId), [initial.instanceId]);
+
+    const stop = spawnCli(['stop', 'lifecycle-v3-test'], fixture);
+    const stopOutput = collect(stop);
+    const [stopCode] = await once(stop, 'exit');
+    assert.equal(stopCode, 0, stopOutput().stderr);
+    await waitFor(async () => JSON.parse(await readFile(recordPath, 'utf8')).status === 'stopped');
+    const stopped = JSON.parse(await readFile(recordPath, 'utf8'));
+    const startAgain = spawnCli(['start', 'lifecycle-v3-test'], fixture);
+    const startAgainOutput = collect(startAgain);
+    const [startAgainCode] = await once(startAgain, 'exit');
+    assert.equal(startAgainCode, 0, startAgainOutput().stderr);
+    await waitFor(async () => {
+      const current = JSON.parse(await readFile(recordPath, 'utf8'));
+      return current.pid > 0 && current.status !== 'stopped';
+    });
+    const restarted = JSON.parse(await readFile(recordPath, 'utf8'));
+    assert.equal(restarted.instanceId, initial.instanceId);
+    assert.equal(JSON.parse(await readFile(policyPath, 'utf8')).categories.read, 'deny');
+
+    const stopAgain = spawnCli(['stop', 'lifecycle-v3-test'], fixture);
+    const stopAgainOutput = collect(stopAgain);
+    const [stopAgainCode] = await once(stopAgain, 'exit');
+    assert.equal(stopAgainCode, 0, stopAgainOutput().stderr);
+    await waitFor(async () => JSON.parse(await readFile(recordPath, 'utf8')).status === 'stopped');
+
+    const disable = spawnCli(['autostart', 'off', 'lifecycle-v3-test'], fixture, { PATH: toolPath });
+    const disableOutput = collect(disable);
+    const [disableCode] = await once(disable, 'exit');
+    assert.equal(disableCode, 0, disableOutput().stderr);
+    autostart = JSON.parse(await readFile(autostartPath, 'utf8'));
+    assert.deepEqual(autostart.instances, []);
+    assert.equal(JSON.parse(await readFile(recordPath, 'utf8')).status, 'stopped');
+
+    const restart = spawnCli(['restart', 'lifecycle-v3-test'], fixture);
+    const restartOutput = collect(restart);
+    const [restartCode] = await once(restart, 'exit');
+    assert.equal(restartCode, 0, restartOutput().stderr);
+    await waitFor(async () => {
+      const current = JSON.parse(await readFile(recordPath, 'utf8'));
+      return current.pid > 0 && current.status !== 'stopped' && current.instanceId === initial.instanceId;
+    });
+
+    const stopAfterRestart = spawnCli(['stop', 'lifecycle-v3-test'], fixture);
+    const stopAfterRestartOutput = collect(stopAfterRestart);
+    const [stopAfterRestartCode] = await once(stopAfterRestart, 'exit');
+    assert.equal(stopAfterRestartCode, 0, stopAfterRestartOutput().stderr);
+    await waitFor(async () => JSON.parse(await readFile(recordPath, 'utf8')).status === 'stopped');
+
+    const enableStopped = spawnCli(['autostart', 'lifecycle-v3-test'], fixture, { PATH: toolPath });
+    const enableStoppedOutput = collect(enableStopped);
+    const [enableStoppedCode] = await once(enableStopped, 'exit');
+    assert.equal(enableStoppedCode, 0, enableStoppedOutput().stderr);
+    autostart = JSON.parse(await readFile(autostartPath, 'utf8'));
+    assert.deepEqual(autostart.instances.map((item) => item.instanceId), [initial.instanceId]);
+
+    const secondStarter = spawnCli(['-d', '--root', fixture.workspace, '--name', 'lifecycle-v3-other'], fixture);
+    const secondStarterOutput = collect(secondStarter);
+    const [secondStartCode] = await once(secondStarter, 'exit');
+    assert.equal(secondStartCode, 0, secondStarterOutput().stderr);
+    await waitFor(async () => (await instanceJsonFiles(fixture)).length === 2);
+    const records = await Promise.all((await instanceJsonFiles(fixture)).map(async (name) =>
+      JSON.parse(await readFile(path.join(fixture.buildifyxHome, 'instances', name), 'utf8'))
+    ));
+    const secondRecord = records.find((item) => item.name === 'lifecycle-v3-other');
+    assert.ok(secondRecord);
+
+    const enableSecond = spawnCli(['autostart', 'lifecycle-v3-other'], fixture, { PATH: toolPath });
+    const enableSecondOutput = collect(enableSecond);
+    const [enableSecondCode] = await once(enableSecond, 'exit');
+    assert.equal(enableSecondCode, 0, enableSecondOutput().stderr);
+    autostart = JSON.parse(await readFile(autostartPath, 'utf8'));
+    assert.deepEqual(autostart.instances.map((item) => item.instanceId).sort(), [initial.instanceId, secondRecord.instanceId].sort());
+
+    const remover = spawnCli(['rm', 'lifecycle-v3-test'], fixture, { PATH: toolPath });
+    const removerOutput = collect(remover);
+    const [removeCode] = await once(remover, 'exit');
+    assert.equal(removeCode, 0, removerOutput().stderr);
+    assert.equal((await instanceJsonFiles(fixture)).length, 1);
+    autostart = JSON.parse(await readFile(autostartPath, 'utf8'));
+    assert.deepEqual(autostart.instances.map((item) => item.instanceId), [secondRecord.instanceId]);
+
+    const removeSecond = spawnCli(['rm', 'lifecycle-v3-other'], fixture, { PATH: toolPath });
+    const removeSecondOutput = collect(removeSecond);
+    const [removeSecondCode] = await once(removeSecond, 'exit');
+    assert.equal(removeSecondCode, 0, removeSecondOutput().stderr);
+    cleanupNeeded = false;
+    assert.deepEqual(await instanceJsonFiles(fixture), []);
+    autostart = JSON.parse(await readFile(autostartPath, 'utf8'));
+    assert.deepEqual(autostart.instances, []);
+  } finally {
+    if (cleanupNeeded) {
+      const remover = spawnCli(['rm', '--all'], fixture, { PATH: toolPath });
+      await once(remover, 'exit').catch(() => undefined);
+    }
     await cleanupFixture(fixture);
   }
 });

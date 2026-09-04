@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { resolveSafeNewFilePath, resolveSafePath } from '../../src/security/path.js';
+import { classifyPath } from '../../src/security/scope.js';
 import { createFileServices } from '../../src/services/files.js';
 import { MAX_TEXT_FILE_BYTES, countTextLines, readUtf8File, replaceCharacters, replaceLines, writeUtf8FileAtomic } from '../../src/utils/text.js';
 
@@ -27,6 +28,33 @@ test('safe paths reject traversal and symlink escapes', async () => {
     await symlink(path.join(outside), path.join(root, 'external'));
     await assert.rejects(resolveSafePath(root, '../outside'), /outside the allowed root/);
     await assert.rejects(resolveSafeNewFilePath(root, 'external/new.txt'), /outside/);
+  });
+});
+
+test('MCP file and scope resolution always protect Buildifyx internal state', async () => {
+  await withTemp(async (base) => {
+    const internal = path.join(base, '.buildifyx');
+    await mkdir(internal);
+    await writeFile(path.join(internal, 'credentials.json'), 'secret');
+    const previous = process.env.BUILDFYX_HOME;
+    process.env.BUILDFYX_HOME = internal;
+    try {
+      await assert.rejects(
+        resolveSafePath(base, path.join(internal, 'credentials.json')),
+        /Buildifyx internal state/
+      );
+      await assert.rejects(
+        resolveSafeNewFilePath(base, path.join(internal, 'new.json')),
+        /Buildifyx internal state/
+      );
+      await assert.rejects(
+        classifyPath({ root: base, additionalRoots: [base], userPath: path.join(internal, 'credentials.json') }),
+        /Buildifyx internal state/
+      );
+    } finally {
+      if (previous === undefined) delete process.env.BUILDFYX_HOME;
+      else process.env.BUILDFYX_HOME = previous;
+    }
   });
 });
 

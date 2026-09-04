@@ -1,6 +1,6 @@
 {
   "name": "@buildifyx/desktop-agent",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Buildifyx cloud-connected desktop agent for securely running MCP tools on a user-controlled machine.",
   "type": "module",
   "bin": {

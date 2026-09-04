@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getCloudEndpoints, MAX_CLOUD_FRAME_BYTES, normalizeCloudOrigin } from '../../src/transport/cloud.js';
+import { getCloudEndpoints, MANAGEMENT_PROTOCOL_VERSION, MAX_CLOUD_FRAME_BYTES, normalizeCloudOrigin } from '../../src/transport/cloud.js';
 
 test('cloud endpoints use Buildifyx production domain by default', () => {
   const endpoints = getCloudEndpoints();
@@ -10,6 +10,7 @@ test('cloud endpoints use Buildifyx production domain by default', () => {
   assert.equal(endpoints.logoutUrl, 'https://bdxa.buildifyx.com/api/device/logout');
   assert.equal(endpoints.agentUrl, 'wss://bdxa.buildifyx.com/agent');
   assert.equal(MAX_CLOUD_FRAME_BYTES, 4 * 1024 * 1024);
+  assert.equal(MANAGEMENT_PROTOCOL_VERSION, 1);
 });
 
 test('cloud origin normalization accepts local http development endpoints', () => {

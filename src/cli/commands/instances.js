@@ -3,6 +3,7 @@ import { rm as removeFile } from 'node:fs/promises';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { resetInstancePolicy } from '../../permissions/store.js';
+import { getAutostartInstanceIds, removeInstanceAutostart, setInstanceAutostart } from '../../services/autostart.js';
 import { runAttachedDashboard } from '../../tui/remote.js';
 import { requestInstanceControl } from '../../utils/instance-control.js';
 import {
@@ -14,7 +15,8 @@ import {
   removeInstanceRecord,
   saveInstance,
   shortInstanceId,
-  terminateRecoveredProcess
+  terminateRecoveredProcess,
+  updateInstance
 } from '../../utils/instances.js';
 
 function pad(value, width) {
@@ -26,13 +28,13 @@ function displayStatus(instance) {
   if (instance.processOnly) return 'orphan';
   if (!instance.live) {
     if (instance.status === 'restart_failed') return 'restart_failed';
+    if (instance.status === 'stopped') return 'stopped';
     return instance.pidAlive ? 'stale' : 'exited';
   }
   if (instance.status === 'connected') return 'online';
   if (instance.status === 'reconnecting' || instance.status === 'connecting') return instance.status;
   return instance.status ?? 'running';
 }
-
 export async function runInstanceList(args = []) {
   const instances = await listInstances();
   const quiet = args.includes('-q') || args.includes('--quiet') || !process.stdout.isTTY;
@@ -48,11 +50,13 @@ export async function runInstanceList(args = []) {
     return;
   }
 
+  const autostartIds = await getAutostartInstanceIds();
   const rows = instances.map((instance) => ({
     id: shortInstanceId(instance.instanceId),
     name: instance.name,
     workspace: instance.workspace,
     mode: instance.mode,
+    autostart: autostartIds.has(instance.instanceId) ? 'yes' : 'no',
     status: displayStatus(instance)
   }));
   const widths = {
@@ -62,21 +66,23 @@ export async function runInstanceList(args = []) {
     mode: Math.max(4, ...rows.map((row) => row.mode.length))
   };
 
-  console.log(`${pad('ID', widths.id)}  ${pad('NAME', widths.name)}  ${pad('WORKSPACE', widths.workspace)}  ${pad('MODE', widths.mode)}  STATUS`);
+  console.log(`${pad('ID', widths.id)}  ${pad('NAME', widths.name)}  ${pad('WORKSPACE', widths.workspace)}  ${pad('MODE', widths.mode)}  AUTOSTART  STATUS`);
   for (const row of rows) {
     const workspace = row.workspace.length > widths.workspace ? `…${row.workspace.slice(-(widths.workspace - 1))}` : row.workspace;
-    console.log(`${pad(row.id, widths.id)}  ${pad(row.name, widths.name)}  ${pad(workspace, widths.workspace)}  ${pad(row.mode, widths.mode)}  ${row.status}`);
+    console.log(`${pad(row.id, widths.id)}  ${pad(row.name, widths.name)}  ${pad(workspace, widths.workspace)}  ${pad(row.mode, widths.mode)}  ${pad(row.autostart, 9)}  ${row.status}`);
   }
 }
 
 export async function runInstanceInspect(args) {
   const instance = await findInstance(args[0]);
+  const autostart = (await getAutostartInstanceIds()).has(instance.instanceId);
   console.log('Buildifyx Desktop Agent instance');
   console.log('');
   console.log(`Name       ${instance.name}`);
   console.log(`ID         ${instance.instanceId}`);
   console.log(`Status     ${displayStatus(instance)}`);
   console.log(`Mode       ${instance.mode}`);
+  console.log(`Autostart  ${autostart ? 'yes' : 'no'}`);
   console.log(`PID        ${instance.pid}`);
   console.log(`Workspace  ${instance.workspace}`);
   if (instance.deviceName) console.log(`Device     ${instance.deviceName}`);
@@ -172,22 +178,27 @@ function dashboardHasActiveWork(dashboard) {
 
 async function restartBackgroundInstance(instance) {
   if (instance.processOnly) throw new Error(`Instance "${instance.name}" is a recovered legacy orphan and cannot be restarted safely.`);
-  if (!instance.live) throw new Error(`Instance "${instance.name}" is not running.`);
   if (instance.mode !== 'background') throw new Error(`Instance "${instance.name}" is foreground. Restart it from its own terminal.`);
-
-  const snapshot = await requestInstanceControl(instance, 'dashboard.snapshot', { timeoutMs: 1500 });
-  if (!snapshot?.ok || !snapshot.dashboard) throw new Error(`Could not read restart settings from "${instance.name}".`);
-  if (dashboardHasActiveWork(snapshot.dashboard)) {
-    throw new Error(`Instance "${instance.name}" has an active or pending request. Wait for it to finish before restarting.`);
+  if (!instance.live && instance.pidAlive) {
+    throw new Error(`Instance "${instance.name}" has an unverified live PID. Remove it before restarting.`);
   }
-  const unrestrictedCommands = String(snapshot.dashboard.accessMode ?? '').startsWith('Unrestricted');
 
-  const shutdown = await requestInstanceControl(instance, 'shutdown', { timeoutMs: 1500 });
-  if (!shutdown?.ok || shutdown.instanceId !== instance.instanceId) {
-    throw new Error(`Could not safely stop "${instance.name}" before restart.`);
-  }
-  if (!(await waitUntilGone(instance.instanceId, 5000))) {
-    throw new Error(`Instance "${instance.name}" did not stop before restart.`);
+  let unrestrictedCommands = Boolean(instance.unrestrictedCommands);
+  if (instance.live) {
+    const snapshot = await requestInstanceControl(instance, 'dashboard.snapshot', { timeoutMs: 1500 });
+    if (!snapshot?.ok || !snapshot.dashboard) throw new Error(`Could not read restart settings from "${instance.name}".`);
+    if (dashboardHasActiveWork(snapshot.dashboard)) {
+      throw new Error(`Instance "${instance.name}" has an active or pending request. Wait for it to finish before restarting.`);
+    }
+    unrestrictedCommands = String(snapshot.dashboard.accessMode ?? '').startsWith('Unrestricted');
+
+    const shutdown = await requestInstanceControl(instance, 'shutdown', { timeoutMs: 1500 });
+    if (!shutdown?.ok || shutdown.instanceId !== instance.instanceId) {
+      throw new Error(`Could not safely stop "${instance.name}" before restart.`);
+    }
+    if (!(await waitUntilGone(instance.instanceId, 5000))) {
+      throw new Error(`Instance "${instance.name}" did not stop before restart.`);
+    }
   }
 
   const script = fileURLToPath(new URL('../../cli.js', import.meta.url));
@@ -205,13 +216,14 @@ async function restartBackgroundInstance(instance) {
     startedAt: instance.startedAt ?? new Date().toISOString(),
     agentVersion: instance.agentVersion ?? null,
     deviceName: instance.deviceName ?? null,
+    unrestrictedCommands,
     ...(logPath ? { logPath } : {}),
     ...(lastError ? { lastError } : {})
   });
 
   const preserveFailure = async (error) => {
     await saveInstance(restartRecord('restart_failed', error?.message ?? String(error), 0)).catch(() => undefined);
-    await releaseInstanceName(instance.name, instance.instanceId).catch(() => undefined);
+    await claimInstanceName(instance.workspace, instance.name, instance.instanceId).catch(() => undefined);
   };
 
   try {
@@ -243,7 +255,7 @@ async function restartBackgroundInstance(instance) {
     await handle?.close().catch(() => undefined);
     await ensureChildExited(child);
     await preserveFailure(error);
-    throw new Error(`Restart failed after stopping "${instance.name}": ${error.message}. The instance record and policy were preserved for inspection and cleanup.`);
+    throw new Error(`Restart failed for "${instance.name}": ${error.message}. The instance record and policy were preserved for inspection and retry.`);
   }
 
   await handle.close();
@@ -253,7 +265,23 @@ async function restartBackgroundInstance(instance) {
   } catch (error) {
     await ensureChildExited(child);
     await preserveFailure(error);
-    throw new Error(`${error.message} The instance record and policy were preserved for inspection and cleanup.`);
+    throw new Error(`${error.message} The instance record and policy were preserved for inspection and retry.`);
+  }
+}
+export async function runInstanceStart(args = []) {
+  const identifiers = args.filter((arg) => arg !== '--');
+  if (!identifiers.length) throw new Error('Usage: bdxa start <name|id> [name|id ...]');
+
+  const handled = new Set();
+  for (const identifier of identifiers) {
+    const instance = await findInstance(identifier);
+    if (handled.has(instance.instanceId)) continue;
+    handled.add(instance.instanceId);
+    if (instance.processOnly) throw new Error(`Instance "${instance.name}" is a recovered orphan. Use \`bdxa rm\` to clean it up safely.`);
+    if (instance.live) throw new Error(`Instance "${instance.name}" is already running.`);
+    if (instance.mode !== 'background') throw new Error(`Instance "${instance.name}" is not a background instance and cannot be started from the CLI.`);
+    const next = await restartBackgroundInstance(instance);
+    console.log(`✓ Started ${next.name} (${shortInstanceId(next.instanceId)}) · v${next.agentVersion ?? 'unknown'}`);
   }
 }
 
@@ -302,6 +330,7 @@ export async function runInstanceRestart(args = []) {
 }
 
 async function cleanupInstance(instance) {
+  await removeInstanceAutostart(instance.instanceId);
   await resetInstancePolicy(instance.instanceId);
   await removeInstanceRecord(instance.instanceId);
   await releaseInstanceName(instance.name, instance.instanceId).catch(() => undefined);
@@ -362,4 +391,106 @@ export async function runInstanceRemove(args) {
     await cleanupInstance(instance);
     console.log(`✓ Removed ${instance.name}`);
   }
+}
+
+export async function runInstanceStop(args = []) {
+  const stopAll = args.includes('-a') || args.includes('--all');
+  let identifiers = args.filter((arg) => !['-a', '--all'].includes(arg));
+
+  if (stopAll) {
+    const instances = await listInstances();
+    identifiers = instances.filter((item) => item.live && item.mode === 'background' && !item.processOnly).map((item) => item.instanceId);
+    if (!identifiers.length) {
+      console.log('No running background instances to stop.');
+      return;
+    }
+  }
+
+  if (!identifiers.length) throw new Error('Usage: bdxa stop [--all] <name|id> [name|id ...]');
+
+  for (const identifier of identifiers) {
+    const instance = await findInstance(identifier);
+    if (instance.processOnly) throw new Error(`Instance "${instance.name}" is a recovered orphan. Use \`bdxa rm\` to clean it up safely.`);
+    if (instance.mode !== 'background') throw new Error(`Instance "${instance.name}" is foreground. Stop it from its own terminal.`);
+
+    if (!instance.live) {
+      if (instance.pidAlive) {
+        throw new Error(`Instance "${instance.name}" has an unverified live PID. Use \`bdxa rm\` to clean it up safely.`);
+      }
+      if (instance.status !== 'stopped') {
+        await updateInstance(instance.instanceId, { pid: 0, status: 'stopped', controlPath: null, lastError: null });
+      }
+      console.log(`✓ Stopped ${instance.name}`);
+      continue;
+    }
+
+    const response = await requestInstanceControl(instance, 'shutdown', { timeoutMs: 1500 });
+    if (!response?.ok || response.instanceId !== instance.instanceId) {
+      throw new Error(`Could not safely stop "${instance.name}" because its local control identity check failed.`);
+    }
+    if (!(await waitUntilGone(instance.instanceId, 5000))) {
+      throw new Error(`Instance "${instance.name}" did not stop in time.`);
+    }
+
+    const {
+      pidAlive: _pidAlive,
+      verified: _verified,
+      live: _live,
+      processOnly: _processOnly,
+      processCommand: _processCommand,
+      processCwd: _processCwd,
+      ...record
+    } = instance;
+
+    // Older running agents remove their registry record on shutdown. Re-create
+    // the stopped record from the controller so `stop` is backward-compatible.
+    await releaseInstanceName(instance.name, instance.instanceId).catch(() => undefined);
+    await claimInstanceName(instance.workspace, instance.name, instance.instanceId);
+    await saveInstance({
+      ...record,
+      pid: 0,
+      status: 'stopped',
+      controlPath: null,
+      lastError: null
+    });
+    console.log(`✓ Stopped ${instance.name}`);
+  }
+}
+
+export async function runInstanceAutostart(args = []) {
+  const disable = args[0] === 'off' || args[0] === 'disable';
+  const identifier = disable ? args[1] : args[0];
+  if (!identifier || args.length > (disable ? 2 : 1)) {
+    throw new Error('Usage: bdxa autostart <name|id> | bdxa autostart off <name|id>');
+  }
+
+  const instance = await findInstance(identifier);
+  if (instance.processOnly) throw new Error(`Instance "${instance.name}" is a recovered orphan and cannot use autostart.`);
+  if (!disable && !instance.live && instance.pidAlive) {
+    throw new Error(`Instance "${instance.name}" has an unverified live PID. Refusing to enable autostart.`);
+  }
+  if (!disable && instance.mode !== 'background') {
+    throw new Error(`Instance "${instance.name}" is foreground. Move it to background before enabling autostart.`);
+  }
+
+  let unrestrictedCommands = Boolean(instance.unrestrictedCommands);
+  if (!disable && instance.live) {
+    try {
+      const snapshot = await requestInstanceControl(instance, 'dashboard.snapshot', { timeoutMs: 1500 });
+      unrestrictedCommands = String(snapshot?.dashboard?.accessMode ?? '').startsWith('Unrestricted');
+      await updateInstance(instance.instanceId, { unrestrictedCommands });
+    } catch {}
+  }
+
+  const enabled = !disable;
+  await setInstanceAutostart({
+    instanceId: instance.instanceId,
+    name: instance.name,
+    workspace: instance.workspace,
+    unrestrictedCommands
+  }, enabled, { cliEntry: process.argv[1] });
+
+  console.log(enabled
+    ? `✓ Autostart enabled for ${instance.name}`
+    : `✓ Autostart disabled for ${instance.name}`);
 }

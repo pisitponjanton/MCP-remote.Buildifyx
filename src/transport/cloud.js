@@ -4,6 +4,7 @@ import { parseMcpToolInput } from './mcp/tools/registry.js';
 
 export const DEFAULT_CLOUD_ORIGIN = 'https://bdxa.buildifyx.com';
 export const AGENT_PROTOCOL_VERSION = 2;
+export const MANAGEMENT_PROTOCOL_VERSION = 1;
 export const MAX_CLOUD_FRAME_BYTES = 4 * 1024 * 1024;
 function isLoopbackHostname(hostname) {
   const value = String(hostname ?? '').toLowerCase();
@@ -87,6 +88,16 @@ function safeSend(socket, payload) {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
 }
 
+function safeSendAsync(socket, payload) {
+  return new Promise((resolve, reject) => {
+    if (socket.readyState !== WebSocket.OPEN) {
+      reject(new Error('Cloud socket is not open.'));
+      return;
+    }
+    socket.send(JSON.stringify(payload), (error) => error ? reject(error) : resolve());
+  });
+}
+
 export function createCloudAgent({
   cloudUrl = DEFAULT_CLOUD_ORIGIN,
   credentials,
@@ -96,6 +107,8 @@ export function createCloudAgent({
   instance,
   deviceInfo,
   eventBus,
+  managementHandler = null,
+  managementCapabilities = [],
   heartbeatMs = 30_000,
   reconnect = true
 }) {
@@ -126,6 +139,57 @@ export function createCloudAgent({
     }, delay);
   }
 
+  async function handleManagementCall(message) {
+    if (!message.requestId || typeof message.action !== 'string' || !message.action) return;
+    if (message.instanceId && message.instanceId !== instance.instanceId) {
+      safeSend(socket, {
+        type: 'management.error',
+        requestId: message.requestId,
+        instanceId: instance.instanceId,
+        error: { code: 'INSTANCE_MISMATCH', message: 'Management request was routed to the wrong bdxa instance.' }
+      });
+      return;
+    }
+    if (!managementHandler) {
+      safeSend(socket, {
+        type: 'management.error',
+        requestId: message.requestId,
+        instanceId: instance.instanceId,
+        error: { code: 'MANAGEMENT_UNSUPPORTED', message: 'This bdxa version does not support remote management.' }
+      });
+      return;
+    }
+
+    try {
+      const handled = await managementHandler(message.action, message.arguments ?? {}, {
+        requestId: message.requestId,
+        instanceId: instance.instanceId
+      });
+      const envelope = handled && typeof handled === 'object' && ('result' in handled || 'afterSend' in handled)
+        ? handled
+        : { result: handled };
+      await safeSendAsync(socket, {
+        type: 'management.result',
+        requestId: message.requestId,
+        instanceId: instance.instanceId,
+        result: envelope.result ?? null
+      });
+      if (typeof envelope.afterSend === 'function') {
+        setImmediate(() => {
+          Promise.resolve(envelope.afterSend()).catch((error) => setState({ lastError: error?.message ?? String(error) }));
+        });
+      }
+    } catch (error) {
+      const normalized = normalizeError(error);
+      safeSend(socket, {
+        type: 'management.error',
+        requestId: message.requestId,
+        instanceId: instance.instanceId,
+        error: { code: normalized.code, message: normalized.message, details: normalized.details }
+      });
+    }
+  }
+
   async function handleMessage(raw) {
     let message;
     try { message = JSON.parse(raw.toString()); } catch { return; }
@@ -137,6 +201,11 @@ export function createCloudAgent({
 
     if (message.type === 'tool.cancel' && message.requestId) {
       runtime.cancel?.(message.requestId, message.reason ?? 'Cloud request was cancelled');
+      return;
+    }
+
+    if (message.type === 'management.call') {
+      await handleManagementCall(message);
       return;
     }
 
@@ -192,7 +261,13 @@ export function createCloudAgent({
         mode: instance.mode,
         agentVersion: version,
         device: deviceInfo,
-        toolManifest: { count: manifest.count, hash: manifest.hash, manifestVersion: manifest.manifestVersion }
+        toolManifest: { count: manifest.count, hash: manifest.hash, manifestVersion: manifest.manifestVersion },
+        ...(managementHandler ? {
+          capabilities: {
+            managementVersion: MANAGEMENT_PROTOCOL_VERSION,
+            actions: [...new Set(managementCapabilities)]
+          }
+        } : {})
       });
       clearInterval(heartbeat);
       heartbeat = setInterval(() => safeSend(socket, {

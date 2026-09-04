@@ -53,6 +53,15 @@ export function createPolicyManager(initialPolicy, { filePath } = {}) {
         )
       }));
     },
+    async removeCommandRuleByMatch({ executable, argsPrefix = [] }) {
+      const normalizedPrefix = Array.isArray(argsPrefix) ? argsPrefix : [];
+      return mutate((current) => normalizePolicy({
+        ...current,
+        commandRules: current.commandRules.filter((item) =>
+          !(item.executable === executable && JSON.stringify(item.argsPrefix ?? []) === JSON.stringify(normalizedPrefix))
+        )
+      }));
+    },
     async addRoot(root) {
       const absolute = path.resolve(root);
       return mutate((current) => normalizePolicy({
@@ -66,6 +75,13 @@ export function createPolicyManager(initialPolicy, { filePath } = {}) {
       return mutate((current) => normalizePolicy({
         ...current,
         additionalRoots: current.additionalRoots.filter((item) => item !== target)
+      }));
+    },
+    async removeRootByPath(root) {
+      const absolute = path.resolve(root);
+      return mutate((current) => normalizePolicy({
+        ...current,
+        additionalRoots: current.additionalRoots.filter((item) => path.resolve(item) !== absolute)
       }));
     }
   };

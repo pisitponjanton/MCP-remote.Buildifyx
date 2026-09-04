@@ -12,7 +12,8 @@ import { buildifyxHome } from './home.js';
 
 export const DEFAULT_INSTANCES_DIR = path.join(buildifyxHome(), 'instances');
 const PACKAGE_NAME = '@buildifyx/desktop-agent';
-const MANAGEMENT_COMMANDS = new Set(['login', 'logout', 'status', 'ls', 'ps', 'inspect', 'attach', 'restart', 'rm', 'doctor', 'd', 'update', 'u', 'help', '-h', '--help', '-v', '--version', 'local', 'remote', 'r']);
+const MANAGEMENT_COMMANDS = new Set(['login', 'logout', 'status', 'ls', 'ps', 'inspect', 'attach', 'start', 'restart', 'stop', 'autostart', 'rm', 'doctor', 'd', 'update', 'u', 'help', '-h', '--help', '-v', '--version', 'local', 'remote', 'r', '__autostart-restore']);
+
 function isDefaultInstancesDirectory(directory) {
   if (process.env.BUILDFYX_HOME?.trim()) return false;
   return path.resolve(directory) === path.resolve(DEFAULT_INSTANCES_DIR);
@@ -87,7 +88,9 @@ async function describeLiveness(record) {
   const pidAlive = isProcessAlive(record.pid);
   const verified = pidAlive ? await probeInstanceControl(record, { timeoutMs: 250 }) : false;
   const starting = !verified && isStartingGrace(record);
-  const inactiveStatus = record.status === 'restart_failed' ? 'restart_failed' : 'exited';
+  const inactiveStatus = record.status === 'restart_failed'
+    ? 'restart_failed'
+    : record.status === 'stopped' ? 'stopped' : 'exited';
   return {
     ...record,
     pidAlive,
@@ -424,6 +427,7 @@ async function lockIsActive(lockPath, directory) {
     if (Number.isFinite(claimedAt) && Date.now() - claimedAt < 10_000) return true;
     const record = lock.instanceId ? await loadInstance(lock.instanceId, directory) : null;
     if (record) {
+      if (record.status === 'stopped' || record.status === 'restart_failed') return true;
       const state = await describeLiveness(record);
       if (state.live) return true;
     }

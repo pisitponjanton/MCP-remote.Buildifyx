@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process';
+import { rm as removeFile } from 'node:fs/promises';
 import os from 'node:os';
 import process from 'node:process';
 import { createAuditLogger } from '../../audit/logger.js';
 import { createRuntime } from '../../core/runtime.js';
 import { createPolicyManager } from '../../permissions/manager.js';
 import { instancePolicyPath, loadInstancePolicy, resetInstancePolicy } from '../../permissions/store.js';
+import { isInstanceAutostartEnabled, removeInstanceAutostart, setInstanceAutostart } from '../../services/autostart.js';
+import { createManagementHandler, MANAGEMENT_ACTIONS } from '../../services/management.js';
 import { startTui } from '../../tui/index.js';
 import { createToolManifest } from '../../transport/mcp/tools/registry.js';
 import { defaultToolManifestPath, inspectToolManifest } from '../../transport/mcp/manifest-store.js';
@@ -200,6 +203,7 @@ async function startDetached({ root, name, instanceId, unrestrictedCommands, cre
     startedAt: new Date().toISOString(),
     agentVersion: metadata.version,
     deviceName: credentials.deviceName ?? credentials.deviceId,
+    unrestrictedCommands,
     logPath
   });
 
@@ -264,7 +268,8 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
     status: 'starting',
     startedAt: previousRecord?.startedAt ?? new Date().toISOString(),
     agentVersion: metadata.version,
-    deviceName: credentials.deviceName ?? credentials.deviceId
+    deviceName: credentials.deviceName ?? credentials.deviceId,
+    unrestrictedCommands
   });
 
   const policyFilePath = instancePolicyPath(instanceId);
@@ -285,7 +290,44 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
   const accessMode = unrestrictedCommands ? 'Unrestricted commands · not sandboxed' : 'Restricted commands';
   audit.start();
 
-  const cloud = createCloudAgent({
+  let cloud = null;
+  let requestRemoteRestart = async () => { throw new Error('Remote restart is not ready yet.'); };
+  const baseManagementHandler = createManagementHandler({
+    policyManager,
+    instance: { instanceId, name, path: root, mode },
+    getConnectionState: () => cloud?.getState() ?? null,
+    onRestart: () => requestRemoteRestart(),
+    onStop: () => stopAndExit(),
+    onRemove: () => removeAndExit(),
+    getAutostart: () => isInstanceAutostartEnabled(instanceId),
+    setAutostart: (enabled) => setInstanceAutostart({
+      instanceId,
+      name,
+      workspace: root,
+      unrestrictedCommands
+    }, enabled, { cliEntry: process.argv[1] })
+  });
+  const managementHandler = async (action, argumentsValue, context) => {
+    if (['instance.restart', 'instance.remove'].includes(action)) {
+      if (hasInFlightTools(runtime.eventBus.getHistory()) || (runtime.approvalQueue?.getPending()?.length ?? 0) > 0) {
+        throw new Error('Wait for active tools and approvals to finish before changing this instance lifecycle.');
+      }
+    }
+    const result = await baseManagementHandler(action, argumentsValue, context);
+    if (!['settings.get', 'instance.status', 'autostart.get'].includes(action)) {
+      runtime.eventBus.emit('management.changed', {
+        requestId: context?.requestId ?? null,
+        action,
+        category: typeof argumentsValue?.category === 'string' ? argumentsValue.category : undefined,
+        root: typeof argumentsValue?.root === 'string' ? argumentsValue.root : undefined,
+        executable: typeof argumentsValue?.executable === 'string' ? argumentsValue.executable : undefined,
+        enabled: typeof argumentsValue?.enabled === 'boolean' ? argumentsValue.enabled : undefined
+      });
+    }
+    return result;
+  };
+
+  cloud = createCloudAgent({
     cloudUrl: credentials.cloudUrl,
     credentials,
     runtime,
@@ -298,16 +340,17 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
       platform: process.platform,
       arch: process.arch
     },
-    eventBus: runtime.eventBus
+    eventBus: runtime.eventBus,
+    managementHandler,
+    managementCapabilities: MANAGEMENT_ACTIONS
   });
-
   let closing = false;
   let handedOff = false;
   let control = null;
   let unsubscribeCloud = () => {};
   let onSignal = null;
   let registryUpdate = Promise.resolve();
-  const shutdown = async () => {
+  const shutdown = async ({ preserveInstance = false, finalStatus = 'stopped' } = {}) => {
     if (closing) return;
     closing = true;
     unsubscribeCloud();
@@ -320,8 +363,12 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
     if (control) await control.close().catch(() => undefined);
     control = null;
     if (!handedOff) {
-      await removeInstanceRecord(instanceId);
-      await releaseInstanceName(name, instanceId).catch(() => undefined);
+      if (preserveInstance) {
+        await updateInstance(instanceId, { pid: 0, status: finalStatus, controlPath: null, lastError: null }).catch(() => undefined);
+      } else {
+        await removeInstanceRecord(instanceId);
+        await releaseInstanceName(name, instanceId).catch(() => undefined);
+      }
     }
   };
 
@@ -330,6 +377,19 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
     process.exit(code);
   };
 
+  const stopAndExit = async () => {
+    await shutdown({ preserveInstance: true, finalStatus: 'stopped' });
+    process.exit(0);
+  };
+
+  const removeAndExit = async () => {
+    const logPath = previousRecord?.logPath ?? null;
+    await removeInstanceAutostart(instanceId);
+    await shutdown();
+    await resetInstancePolicy(instanceId).catch(() => undefined);
+    if (logPath) await removeFile(logPath, { force: true }).catch(() => undefined);
+    process.exit(0);
+  };
   const forceShutdownAndExit = async () => {
     if (closing) {
       process.exit(1);
@@ -425,7 +485,7 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
         startedAt: previousRecord?.startedAt ?? new Date().toISOString(),
         logPath: previousRecord?.logPath ?? null
       },
-      onShutdown: () => shutdownAndExit(0),
+      onShutdown: () => stopAndExit(),
       onForce: () => forceShutdownAndExit(),
       onCommand: handleControlCommand
     });
@@ -464,6 +524,49 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
   onSignal = () => { void shutdownAndExit(0); };
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
+
+  requestRemoteRestart = async () => {
+    const prepared = await prepareHandoffChild({ root, name, instanceId, unrestrictedCommands });
+    const parentControlPath = control?.endpoint ?? null;
+
+    try {
+      if (control) await control.close();
+      control = null;
+      const activated = await prepared.activate();
+      handedOff = true;
+      closing = true;
+      unsubscribeCloud();
+      const runtimeStopping = runtime.stop?.('Agent restarted remotely');
+      await registryUpdate.catch(() => undefined);
+      await runtimeStopping;
+      await cloud.stop();
+      audit.stop();
+      await audit.flush?.();
+      if (onSignal) {
+        process.removeListener('SIGINT', onSignal);
+        process.removeListener('SIGTERM', onSignal);
+      }
+      await updateInstance(instanceId, {
+        pid: activated.pid,
+        mode: 'background',
+        logPath: activated.logPath
+      });
+      process.exit(0);
+    } catch (error) {
+      if (!handedOff) prepared.cancel();
+      if (!handedOff) {
+        await updateInstance(instanceId, {
+          pid: process.pid,
+          mode,
+          controlPath: parentControlPath,
+          status: cloud.getState().status
+        }).catch(() => undefined);
+        if (!control) await startControl().catch(() => undefined);
+      }
+      if (handedOff) process.exit(1);
+      throw error;
+    }
+  };
 
   cloud.connect();
   if (handoffChild) notifyHandoffActive(instanceId);

@@ -2,11 +2,12 @@ import { printHelp } from './help.js';
 import { parseInvocation } from './options.js';
 import { runCloud } from './commands/cloud.js';
 import { runDoctor } from './commands/doctor.js';
-import { runInstanceAttach, runInstanceInspect, runInstanceList, runInstanceRemove, runInstanceRestart } from './commands/instances.js';
+import { runInstanceAttach, runInstanceAutostart, runInstanceInspect, runInstanceList, runInstanceRemove, runInstanceRestart, runInstanceStart, runInstanceStop } from './commands/instances.js';
 import { runLogin } from './commands/login.js';
 import { runLogout } from './commands/logout.js';
 import { runStatus } from './commands/status.js';
 import { runUpdate } from './commands/update.js';
+import { restoreAutostartInstances } from '../services/autostart.js';
 import { checkForUpdate, formatUpdateNotice, getPackageMetadata } from '../version.js';
 
 function printUpdateNotice(status) {
@@ -17,6 +18,7 @@ function printUpdateNotice(status) {
 
 async function getInvocationUpdateStatus(command, args, metadata) {
   if (process.env.BUILDFYX_SKIP_UPDATE_CHECK === '1') return null;
+  if (command.startsWith('__')) return null;
   if (command === 'update' || command === 'u' || command === 'doctor' || command === 'd') return null;
   if (args.includes('--background-child') || args.includes('--handoff-child')) return null;
   return checkForUpdate(metadata.name, metadata.version, { timeoutMs: 1200 });
@@ -31,6 +33,15 @@ export async function runCli(argv = process.argv.slice(2)) {
   const { command, args } = parseInvocation(argv);
   const metadata = await getPackageMetadata();
   const updateStatus = await getInvocationUpdateStatus(command, args, metadata);
+
+  if (command === '__autostart-restore') {
+    const result = await restoreAutostartInstances();
+    if (result.failed.length) {
+      console.error(`Autostart restored ${result.restored} instance(s) with ${result.failed.length} failure(s).`);
+      process.exitCode = 1;
+    }
+    return;
+  }
 
   if (command === '-h' || command === '--help' || command === 'help') {
     printUpdateNotice(updateStatus);
@@ -78,9 +89,21 @@ export async function runCli(argv = process.argv.slice(2)) {
       printUpdateNotice(updateStatus);
       await runInstanceAttach(args, { metadata, updateStatus });
       return;
+    case 'start':
+      printUpdateNotice(updateStatus);
+      await runInstanceStart(args);
+      return;
     case 'restart':
       printUpdateNotice(updateStatus);
       await runInstanceRestart(args);
+      return;
+    case 'stop':
+      printUpdateNotice(updateStatus);
+      await runInstanceStop(args);
+      return;
+    case 'autostart':
+      printUpdateNotice(updateStatus);
+      await runInstanceAutostart(args);
       return;
     case 'rm':
       printUpdateNotice(updateStatus);
