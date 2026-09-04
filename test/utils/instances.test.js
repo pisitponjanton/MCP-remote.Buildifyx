@@ -15,7 +15,8 @@ import {
   releaseInstanceName,
   removeInstanceRecord,
   saveInstance,
-  shortInstanceId
+  shortInstanceId,
+  updateInstance
 } from '../../src/utils/instances.js';
 
 async function withTempDir(fn) {
@@ -188,6 +189,36 @@ test('a reused/live PID without the bdxa control socket is treated as stale', as
     assert.equal(listed.verified, false);
     assert.equal(listed.live, false);
     assert.equal(listed.status, 'exited');
+  });
+});
+
+test('instance persistence strips runtime-only liveness fields on save and update', async () => {
+  await withTempDir(async (directory) => {
+    const instanceId = createInstanceId();
+    const recordPath = path.join(directory, `${instanceId}.json`);
+    await writeFile(recordPath, `${JSON.stringify({
+      instanceId,
+      name: 'persist-test',
+      workspace: '/tmp/persist-test',
+      mode: 'background',
+      pid: 0,
+      status: 'stopped',
+      live: false,
+      verified: false,
+      pidAlive: false,
+      processOnly: true,
+      processCommand: 'node ./src/cli.js',
+      processCwd: '/tmp',
+      futurePersistentField: 'keep-me'
+    }, null, 2)}\n`, 'utf8');
+
+    await updateInstance(instanceId, { status: 'starting', live: true, verified: true, pidAlive: true }, directory);
+    const stored = await loadInstance(instanceId, directory);
+    assert.equal(stored.status, 'starting');
+    assert.equal(stored.futurePersistentField, 'keep-me');
+    for (const key of ['live', 'verified', 'pidAlive', 'processOnly', 'processCommand', 'processCwd']) {
+      assert.equal(Object.prototype.hasOwnProperty.call(stored, key), false, `${key} should not be persisted`);
+    }
   });
 });
 

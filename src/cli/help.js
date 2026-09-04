@@ -18,13 +18,14 @@ Manage instances:
   bdxa ps                      Alias for bdxa ls
   bdxa inspect <name|id>       Show instance details
   bdxa attach <name|id>        Open the full dashboard for a running instance
-  bdxa attach <name|id>        Open the full dashboard for a running instance
   bdxa start <name|id...>      Start stopped background instances
   bdxa stop <name|id...>       Stop background instances but keep settings/autostart
   bdxa stop --all              Stop every running background instance
   bdxa restart <name|id...>    Restart/start background instances and keep their settings
   bdxa restart --all           Restart every currently running background instance
   bdxa autostart <name|id>     Start this background instance automatically after login/reboot
+  bdxa autostart off <name|id> Disable autostart without stopping the instance
+  bdxa rm <name|id...>         Stop/remove instances and reset their local settings
   bdxa rm -f <name|id...>      Force-exit through the verified local control channel
   bdxa rm --all                Remove all instances, policies, and autostart entries
 

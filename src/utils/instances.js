@@ -50,13 +50,31 @@ export function isProcessAlive(pid) {
   }
 }
 
+const RUNTIME_INSTANCE_FIELDS = new Set([
+  'pidAlive',
+  'verified',
+  'live',
+  'processOnly',
+  'processCommand',
+  'processCwd'
+]);
+
+function persistentInstanceRecord(record) {
+  const persistent = {};
+  for (const [key, value] of Object.entries(record ?? {})) {
+    if (!RUNTIME_INSTANCE_FIELDS.has(key)) persistent[key] = value;
+  }
+  return persistent;
+}
+
 export async function saveInstance(record, directory = DEFAULT_INSTANCES_DIR) {
+  const persistent = persistentInstanceRecord(record);
   await mkdir(directory, { recursive: true });
-  const filePath = instanceFile(record.instanceId, directory);
+  const filePath = instanceFile(persistent.instanceId, directory);
   const temporary = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await writeFile(temporary, `${JSON.stringify(persistent, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(temporary, filePath);
-  return record;
+  return persistent;
 }
 
 export async function loadInstance(instanceId, directory = DEFAULT_INSTANCES_DIR) {
