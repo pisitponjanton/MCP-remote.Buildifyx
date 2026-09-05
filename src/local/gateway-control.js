@@ -96,6 +96,14 @@ export function localGatewayConfigPath(environment) {
   return path.join(environment.rootDirectory, 'gateway-config.json');
 }
 
+export function legacyLocalAuthPath(environment) {
+  return path.join(environment.rootDirectory, 'auth.json');
+}
+
+export async function removeLegacyLocalAuth(environment) {
+  await rm(legacyLocalAuthPath(environment), { force: true });
+}
+
 export function parseLocalPort(value = DEFAULT_LOCAL_PORT) {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid local gateway port: ${value}`);
@@ -166,20 +174,24 @@ export async function getLocalGatewayStatus(environment) {
   return { running: true, state, health };
 }
 
-async function waitForGateway(environment, gatewayId, timeoutMs = 10_000) {
+async function waitForGateway(environment, gatewayId, child = null, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const status = await getLocalGatewayStatus(environment);
-    if (status.running && status.state.gatewayId === gatewayId) return status;
+    if (status.running && status.state.gatewayId === gatewayId) return { status, childExited: false };
+    if (child && (child.exitCode !== null || child.signalCode !== null)) {
+      return { status: null, childExited: true, exitCode: child.exitCode, signalCode: child.signalCode };
+    }
     await new Promise((resolve) => setTimeout(resolve, 80));
   }
-  return null;
+  return { status: null, childExited: false };
 }
 
 export async function startLocalGateway({ environment, cliEntry, port = DEFAULT_LOCAL_PORT, version }) {
   const releaseLock = await acquireGatewayStartupLock(environment);
   try {
     const requestedPort = parseLocalPort(port);
+    await removeLegacyLocalAuth(environment).catch(() => undefined);
     const current = await getLocalGatewayStatus(environment);
     if (current.running) {
       if (current.state.port !== requestedPort) {
@@ -195,6 +207,7 @@ export async function startLocalGateway({ environment, cliEntry, port = DEFAULT_
     const controlToken = randomBytes(32).toString('hex');
     const logPath = localGatewayLogPath(environment);
     const handle = await open(logPath, 'a', 0o600);
+    const logStartSize = (await handle.stat()).size;
     let child = null;
     try {
       await writePrivateJson(localGatewayStartupPath(environment), {
@@ -225,15 +238,26 @@ export async function startLocalGateway({ environment, cliEntry, port = DEFAULT_
       await handle.close();
     }
 
-    const ready = await waitForGateway(environment, gatewayId);
-    if (!ready) {
-      try { child?.kill('SIGTERM'); } catch {}
+    const startup = await waitForGateway(environment, gatewayId, child);
+    if (!startup.status) {
+      if (!startup.childExited) {
+        try { child?.kill('SIGTERM'); } catch {}
+      }
       await removeLocalGatewayState(environment);
+      if (startup.childExited) {
+        let latestLog = '';
+        try { latestLog = (await readFile(logPath)).subarray(logStartSize).toString('utf8'); } catch {}
+        if (/EADDRINUSE/.test(latestLog)) {
+          throw new Error(`Local gateway could not start: port ${requestedPort} is already in use.`);
+        }
+        const exit = startup.exitCode !== null ? `code ${startup.exitCode}` : `signal ${startup.signalCode ?? 'unknown'}`;
+        throw new Error(`Local gateway exited before becoming ready (${exit}). Check ${logPath}.`);
+      }
       throw new Error(`Local gateway did not become ready on port ${requestedPort}. Check ${logPath}.`);
     }
     await removeLocalGatewayStartup(environment).catch(() => undefined);
     await writeLocalGatewayConfig(environment, { port: requestedPort });
-    return { ...ready, alreadyRunning: false };
+    return { ...startup.status, alreadyRunning: false };
   } finally {
     await removeLocalGatewayStartup(environment).catch(() => undefined);
     await releaseLock().catch(() => undefined);

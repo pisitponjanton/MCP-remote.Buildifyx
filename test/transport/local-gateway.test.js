@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { isAllowedLocalRequest } from '../../src/local/gateway-server.js';
+import { isAllowedLocalRequest, LOCAL_GATEWAY_HOST, LOCAL_MCP_SESSION_IDLE_MS, MAX_LOCAL_MCP_SESSIONS } from '../../src/local/gateway-server.js';
 import {
   DEFAULT_LOCAL_PORT,
   localGatewayChildArgs,
@@ -17,6 +17,13 @@ function request(host, origin) {
   return { headers: { host, ...(origin ? { origin } : {}) } };
 }
 
+
+
+test('local gateway stays loopback-only with bounded MCP sessions', () => {
+  assert.equal(LOCAL_GATEWAY_HOST, '127.0.0.1');
+  assert.equal(LOCAL_MCP_SESSION_IDLE_MS, 2 * 60 * 60 * 1000);
+  assert.equal(MAX_LOCAL_MCP_SESSIONS, 100);
+});
 
 
 test('local gateway child argv never contains the shutdown control secret', () => {

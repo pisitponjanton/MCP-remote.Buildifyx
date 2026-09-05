@@ -51,7 +51,7 @@ bdxa local restart --all
 bdxa local down
 ```
 
-Local MCP clients connect to `http://127.0.0.1:<port>/mcp` with **No Auth**. The gateway binds only to `127.0.0.1`; when a remote MCP client needs access, expose that local port through your own HTTPS tunnel or reverse proxy and use the resulting `https://.../mcp` URL. Forwarded public `Host` values are accepted so tunnels work, while non-loopback browser `Origin` values are rejected. Local instances, policies, logs, audit data, and autostart profiles stay under `~/.buildifyx/local/`. Local management uses the same CLI/TUI implementation as Cloud; there is no Local web management UI.
+Local MCP clients connect to `http://127.0.0.1:<port>/mcp` with **No Auth**. The gateway binds only to `127.0.0.1`; when a remote MCP client needs access, expose that local port through your own HTTPS tunnel or reverse proxy and use the resulting `https://.../mcp` URL. Treat that exposed URL as a secret: anyone who can reach it can invoke MCP tools using each workspace's configured permissions. The shared default policy allows read/write/command operations inside the workspace, while dangerous operations and outside-root access require approval. Forwarded public `Host` values are accepted when no browser Origin is present; non-loopback browser `Origin` values are rejected. Local instances, policies, logs, audit data, and autostart profiles stay under `~/.buildifyx/local/`. Local management uses the same CLI/TUI implementation as Cloud; there is no Local web management UI.
 
 `bdxa local` and other Local instance commands require the Local gateway to be running. `bdxa local down` gracefully stops Local workspaces and the gateway. Background instance records/settings are preserved for `bdxa local start <name|id>`, while foreground run records are released so the same name can be started again later.
 
@@ -420,7 +420,7 @@ bdxa --version
 ## Security notes
 
 - Buildifyx Cloud does not bypass the local permission system.
-- Local MCP uses **No Auth** and binds only to `127.0.0.1`. If you expose it through an HTTPS tunnel/reverse proxy, anyone who can reach that public MCP URL can attempt tool calls, so keep the tunnel private or temporary and rely on the Agent permission/approval policy for tool execution.
+- Local MCP uses **No Auth** and binds only to `127.0.0.1`. If you expose it through an HTTPS tunnel/reverse proxy, treat the resulting MCP URL as a secret: anyone who can reach it can invoke tools under the workspace permissions. The shared default policy allows read/write/command operations inside the workspace; dangerous operations and outside-root access require approval.
 - Device credentials are separate from login tokens.
 - Each running workspace process has a separate instance identity and workspace root.
 - Tool arguments received through Cloud or Local MCP are validated again by the local Agent before permission evaluation or execution.

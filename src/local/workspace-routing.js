@@ -57,14 +57,8 @@ export function workspaceSummary(target, selected = null) {
   return {
     id: target.targetId,
     targetId: target.targetId,
-    deviceId: target.deviceId,
-    instanceId: target.instanceId,
     name: target.name,
-    path: target.path,
-    device: target.deviceName,
     mode: target.mode,
-    legacy: false,
-    agentVersion: target.agentVersion,
     status: 'online',
     selected: selected?.targetId === target.targetId
   };

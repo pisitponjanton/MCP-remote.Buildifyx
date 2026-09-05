@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import test from 'node:test';
 import { getMcpToolDefinitions } from '../../src/transport/mcp/tools/registry.js';
+import { MAX_LOCAL_MCP_SESSIONS } from '../../src/local/gateway-server.js';
 import { instancePolicyPath } from '../../src/permissions/store.js';
 import { requestInstanceControl } from '../../src/utils/instance-control.js';
 import { terminateRecoveredProcess } from '../../src/utils/instances.js';
@@ -184,6 +185,9 @@ test('one local MCP port routes shared tools to multiple local instances', async
     assert.equal((await runCli(['local', '-d', '--root', fixture.workspaceA, '--name', 'local-a'], fixture)).code, 0);
     assert.equal((await runCli(['local', '-d', '--root', fixture.workspaceB, '--name', 'local-b'], fixture)).code, 0);
     await waitFor(async () => (await localRecords(fixture)).filter((item) => item.status === 'connected').length === 2);
+    const localRecord = (await localRecords(fixture))[0];
+    const localPolicy = JSON.parse(await readFile(instancePolicyPath(localRecord.instanceId, path.join(fixture.buildifyxHome, 'local')), 'utf8'));
+    assert.deepEqual(localPolicy.categories, { read: 'allow', write: 'allow', command: 'allow', dangerous: 'ask', outsideRoot: 'ask' });
 
     const sessionId = await initializeMcp(port);
     const tools = await mcpCall(port, sessionId, 2, 'tools/list', {});
@@ -194,6 +198,16 @@ test('one local MCP port routes shared tools to multiple local instances', async
     const listed = await mcpCall(port, sessionId, 3, 'tools/call', { name: 'list_workspaces', arguments: {} });
     assert.equal(listed.result.structuredContent.workspaces.length, 2);
     assert.equal(listed.result.structuredContent.devices.length, 1);
+    assert.equal(listed.result.structuredContent.devices[0].id, 'local');
+    assert.equal(listed.result.structuredContent.devices[0].name, 'Local device');
+    const listedJson = JSON.stringify(listed.result.structuredContent);
+    assert.equal(listedJson.includes(fixture.workspaceA), false);
+    assert.equal(listedJson.includes(fixture.workspaceB), false);
+    assert.equal(listedJson.includes(os.hostname()), false);
+    for (const record of await localRecords(fixture)) assert.equal(listedJson.includes(record.instanceId), false);
+    for (const workspace of listed.result.structuredContent.workspaces) {
+      assert.deepEqual(Object.keys(workspace).sort(), ['id', 'mode', 'name', 'selected', 'status', 'targetId'].sort());
+    }
 
     const readA = await mcpCall(port, sessionId, 4, 'tools/call', {
       name: 'read_file', arguments: { workspace: 'local-a', path: 'which.txt' }
@@ -371,6 +385,9 @@ test('local MCP uses No Auth while internal gateway shutdown stays protected', a
   const fixture = await setupFixture();
   const port = await freePort();
   try {
+    const localRoot = path.join(fixture.buildifyxHome, 'local');
+    await mkdir(localRoot, { recursive: true });
+    await writeFile(path.join(localRoot, 'auth.json'), JSON.stringify({ version: 1, token: 'legacy-token' }));
     const up = await runCli(['local', 'up', String(port)], fixture);
     assert.equal(up.code, 0, up.stderr);
     assert.match(up.stdout, /Auth\s+No Auth/);
@@ -392,6 +409,54 @@ test('local MCP uses No Auth while internal gateway shutdown stays protected', a
     const health = await fetch(`http://127.0.0.1:${port}/health`);
     assert.equal(health.status, 200);
   } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+
+test('local MCP session count is bounded and evicts the oldest session', async () => {
+  const fixture = await setupFixture();
+  const port = await freePort();
+  try {
+    assert.equal((await runCli(['local', 'up', String(port)], fixture)).code, 0);
+    const sessions = [];
+    for (let index = 0; index <= MAX_LOCAL_MCP_SESSIONS; index += 1) sessions.push(await initializeMcp(port));
+
+    const evicted = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': sessions[0]
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+    });
+    assert.equal(evicted.status, 404);
+
+    const newest = await mcpCall(port, sessions.at(-1), 3, 'tools/list', {});
+    assert.ok(Array.isArray(newest.result.tools));
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test('local gateway fails fast when the requested port is already in use', async () => {
+  const fixture = await setupFixture();
+  const port = await freePort();
+  const holder = net.createServer((socket) => socket.destroy());
+  try {
+    await new Promise((resolve, reject) => {
+      holder.once('error', reject);
+      holder.listen(port, '127.0.0.1', resolve);
+    });
+    const startedAt = Date.now();
+    const result = await runCli(['local', 'up', String(port)], fixture);
+    const elapsedMs = Date.now() - startedAt;
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, new RegExp(`port ${port} is already in use`, 'i'));
+    assert.ok(elapsedMs < 3000, `expected fail-fast startup, got ${elapsedMs}ms`);
+  } finally {
+    await new Promise((resolve) => holder.close(() => resolve())).catch(() => undefined);
     await cleanupFixture(fixture);
   }
 });

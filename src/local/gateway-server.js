@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import { McpServer } from '@modelcontextprotocol/server';
@@ -11,7 +11,9 @@ import { errorResult, successResult } from '../transport/mcp/response.js';
 import { resolveWorkspaceTarget, selectedTarget, workspaceSummary } from './workspace-routing.js';
 import { AgentError, ErrorCode } from '../core/errors.js';
 
-const SESSION_IDLE_MS = 24 * 60 * 60 * 1000;
+export const LOCAL_GATEWAY_HOST = '127.0.0.1';
+export const LOCAL_MCP_SESSION_IDLE_MS = 2 * 60 * 60 * 1000;
+export const MAX_LOCAL_MCP_SESSIONS = 100;
 const LOCAL_TOOL_CALL_TIMEOUT_MS = 5 * 60 * 1000;
 const readOnlyAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const targetIdSelector = z.string().min(1).max(512).optional();
@@ -38,7 +40,7 @@ export function createLocalGateway({ environment, version, gatewayId, controlTok
     return instances.filter((item) => item.live && item.verified && !item.processOnly).map((item) => {
       const deviceName = item.deviceName ?? os.hostname();
       return {
-        targetId: `local:${item.instanceId}`,
+        targetId: `local:${createHash('sha256').update(item.instanceId).digest('hex').slice(0, 16)}`,
         deviceId: deviceName,
         instanceId: item.instanceId,
         name: item.name,
@@ -114,7 +116,7 @@ export function createLocalGateway({ environment, version, gatewayId, controlTok
     }, async () => {
       const targets = await availableTargets();
       const workspaces = targets.map((target) => workspaceSummary(target, session.target));
-      const devices = workspaces.length ? [{ id: os.hostname(), name: os.hostname(), workspaces }] : [];
+      const devices = workspaces.length ? [{ id: 'local', name: 'Local device', workspaces }] : [];
       const result = { workspaces, devices, selectedTargetId: session.target?.targetId ?? null, selectedWorkspace: session.target?.targetId ?? null };
       return successResult(result);
     });
@@ -152,9 +154,25 @@ export function createLocalGateway({ environment, version, gatewayId, controlTok
 
   function pruneSessions(now = Date.now()) {
     for (const [id, active] of sessions) {
-      if (now - active.lastSeenAt <= SESSION_IDLE_MS) continue;
+      if (now - active.lastSeenAt <= LOCAL_MCP_SESSION_IDLE_MS) continue;
       sessions.delete(id);
       void active.transport.close().catch(() => undefined);
+    }
+  }
+
+  function makeRoomForSession() {
+    while (sessions.size >= MAX_LOCAL_MCP_SESSIONS) {
+      let oldestId = null;
+      let oldest = null;
+      for (const [id, active] of sessions) {
+        if (!oldest || active.lastSeenAt < oldest.lastSeenAt) {
+          oldestId = id;
+          oldest = active;
+        }
+      }
+      if (!oldestId || !oldest) break;
+      sessions.delete(oldestId);
+      void oldest.transport.close().catch(() => undefined);
     }
   }
 
@@ -179,7 +197,10 @@ export function createLocalGateway({ environment, version, gatewayId, controlTok
     transport.onclose = () => { if (transport.sessionId) sessions.delete(transport.sessionId); };
     await server.connect(transport);
     await transport.handleRequest(req, res);
-    if (transport.sessionId) sessions.set(transport.sessionId, { server, transport, session, lastSeenAt: Date.now() });
+    if (transport.sessionId) {
+      makeRoomForSession();
+      sessions.set(transport.sessionId, { server, transport, session, lastSeenAt: Date.now() });
+    }
     else await transport.close().catch(() => undefined);
   }
 
@@ -235,15 +256,15 @@ export function createLocalGateway({ environment, version, gatewayId, controlTok
 
     await new Promise((resolve, reject) => {
       httpServer.once('error', reject);
-      httpServer.listen(port, '127.0.0.1', () => {
+      httpServer.listen(port, LOCAL_GATEWAY_HOST, () => {
         httpServer.off('error', reject);
         resolve();
       });
     });
     return {
       port,
-      mcpUrl: `http://127.0.0.1:${port}/mcp`,
-      healthUrl: `http://127.0.0.1:${port}/health`,
+      mcpUrl: `http://${LOCAL_GATEWAY_HOST}:${port}/mcp`,
+      healthUrl: `http://${LOCAL_GATEWAY_HOST}:${port}/health`,
       close
     };
   }
