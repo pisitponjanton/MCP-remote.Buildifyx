@@ -65,6 +65,9 @@ test('local workspace routing supports target, workspace and device selectors', 
   ];
   assert.equal(resolveWorkspaceTarget(targets, { targetId: 'local:two' }).instanceId, 'two');
   assert.equal(resolveWorkspaceTarget(targets, { workspace: 'api' }).instanceId, 'one');
+  assert.equal(resolveWorkspaceTarget(targets, { workspace: 'api', device: 'local' }).instanceId, 'one');
+  assert.equal(resolveWorkspaceTarget([targets[0]], { device: 'local' }).instanceId, 'one');
+  assert.throws(() => resolveWorkspaceTarget(targets, { device: 'local' }), /multiple local instances/i);
   assert.throws(() => resolveWorkspaceTarget(targets, { device: 'mac' }), /multiple local instances/i);
   assert.throws(() => resolveWorkspaceTarget(targets, {}), /use use_workspace first/i);
 });

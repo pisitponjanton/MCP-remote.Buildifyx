@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -381,6 +382,39 @@ ${second.stdout}`;
     await cleanupFixture(fixture);
   }
 });
+test('local up preserves legacy auth while an older gateway is still running', async () => {
+  const fixture = await setupFixture();
+  const port = await freePort();
+  const gatewayId = 'legacy-gateway';
+  const localRoot = path.join(fixture.buildifyxHome, 'local');
+  const legacyAuthPath = path.join(localRoot, 'auth.json');
+  const server = createHttpServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, gatewayId, version: '0.3.1', pid: process.pid, port }));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  try {
+    await mkdir(localRoot, { recursive: true });
+    await writeFile(legacyAuthPath, JSON.stringify({ version: 1, token: 'legacy-token' }));
+    await writeFile(path.join(localRoot, 'gateway.json'), JSON.stringify({
+      version: 1, gatewayId, controlToken: 'legacy-control', port, pid: process.pid, agentVersion: '0.3.0'
+    }));
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+
+    const result = await runCli(['local', 'up', String(port)], fixture);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /already running/i);
+    const legacy = JSON.parse(await readFile(legacyAuthPath, 'utf8'));
+    assert.equal(legacy.token, 'legacy-token');
+  } finally {
+    await new Promise((resolve) => server.close(() => resolve())).catch(() => undefined);
+    await cleanupFixture(fixture);
+  }
+});
+
 test('local MCP uses No Auth while internal gateway shutdown stays protected', async () => {
   const fixture = await setupFixture();
   const port = await freePort();

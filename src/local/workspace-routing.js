@@ -5,6 +5,7 @@ function normalize(value) {
 function matchesDevice(target, selector) {
   if (!selector) return true;
   const needle = normalize(selector);
+  if (needle === 'local') return true;
   return normalize(target.deviceId) === needle || normalize(target.deviceName) === needle;
 }
 
