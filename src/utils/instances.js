@@ -12,11 +12,15 @@ import { buildifyxHome } from './home.js';
 
 export const DEFAULT_INSTANCES_DIR = path.join(buildifyxHome(), 'instances');
 const PACKAGE_NAME = '@buildifyx/desktop-agent';
-const MANAGEMENT_COMMANDS = new Set(['login', 'logout', 'status', 'ls', 'ps', 'inspect', 'attach', 'start', 'restart', 'stop', 'autostart', 'rm', 'doctor', 'd', 'update', 'u', 'help', '-h', '--help', '-v', '--version', 'local', 'remote', 'r', '__autostart-restore']);
+const MANAGEMENT_COMMANDS = new Set(['login', 'logout', 'status', 'ls', 'ps', 'inspect', 'attach', 'start', 'restart', 'stop', 'autostart', 'rm', 'doctor', 'd', 'update', 'u', 'help', '-h', '--help', '-v', '--version', 'remote', 'r', '__autostart-restore', '__local-gateway']);
+const LOCAL_MANAGEMENT_COMMANDS = new Set(['up', 'status', 'token', 'down', 'ls', 'ps', 'inspect', 'attach', 'start', 'restart', 'stop', 'autostart', 'rm', 'help', '-h', '--help']);
 
-function isDefaultInstancesDirectory(directory) {
+function isManagedInstancesDirectory(directory, transport = 'cloud') {
   if (process.env.BUILDFYX_HOME?.trim()) return false;
-  return path.resolve(directory) === path.resolve(DEFAULT_INSTANCES_DIR);
+  const expected = transport === 'local'
+    ? path.join(buildifyxHome(), 'local', 'instances')
+    : DEFAULT_INSTANCES_DIR;
+  return path.resolve(directory) === path.resolve(expected);
 }
 
 export function createInstanceId() {
@@ -190,9 +194,13 @@ export function parseBdxaAgentProcessCommand(command) {
   const marker = command.match(/(?:^|\s)(?:\S*\/)?src\/cli\.js(?:\s|$)/);
   if (!marker || marker.index === undefined) return null;
   const tail = command.slice(marker.index + marker[0].length).trim();
-  const first = tail.split(/\s+/)[0] || '';
+  const tokens = tail.split(/\s+/).filter(Boolean);
+  const first = tokens[0] || '';
   if (MANAGEMENT_COMMANDS.has(first)) return null;
+  const localSubcommand = first === 'local' ? (tokens[1] ?? '') : '';
+  if (first === 'local' && (LOCAL_MANAGEMENT_COMMANDS.has(localSubcommand) || (localSubcommand && !localSubcommand.startsWith('-')))) return null;
   return {
+    transport: first === 'local' ? 'local' : 'cloud',
     instanceId: optionValue(command, '--instance-id'),
     name: optionValue(command, '--instance-name') ?? optionValue(command, '--name'),
     root: optionValue(command, '--root'),
@@ -234,7 +242,7 @@ async function processCwd(pid) {
   return null;
 }
 
-async function discoverAgentProcesses() {
+async function discoverAgentProcesses({ transport = null } = {}) {
   const output = await readProcessTable();
   const found = [];
   for (const line of output.split('\n')) {
@@ -244,7 +252,7 @@ async function discoverAgentProcesses() {
     if (pid === process.pid) continue;
     const command = match[2];
     const parsed = parseBdxaAgentProcessCommand(command);
-    if (!parsed) continue;
+    if (!parsed || (transport && parsed.transport !== transport)) continue;
     const cwd = await processCwd(pid);
     if (!(await isBuildifyxAgentProcessCommand(command, cwd))) continue;
     const workspace = parsed.root ? path.resolve(cwd ?? process.cwd(), parsed.root) : cwd;
@@ -256,7 +264,8 @@ async function discoverAgentProcesses() {
       workspace,
       name: parsed.name ?? path.basename(workspace) ?? 'workspace',
       instanceId: parsed.instanceId,
-      mode: parsed.mode
+      mode: parsed.mode,
+      transport: parsed.transport
     });
   }
   return found;
@@ -377,9 +386,12 @@ function processOnlyRecord(item) {
   };
 }
 
-export async function listInstances(directory = DEFAULT_INSTANCES_DIR) {
+export async function listInstances(directory = DEFAULT_INSTANCES_DIR, { transport = null } = {}) {
   const { records } = await readInstanceRecords(directory);
-  const processes = isDefaultInstancesDirectory(directory) ? await discoverAgentProcesses() : [];
+  const effectiveTransport = transport ?? (isManagedInstancesDirectory(directory, 'cloud') ? 'cloud' : null);
+  const processes = effectiveTransport && isManagedInstancesDirectory(directory, effectiveTransport)
+    ? await discoverAgentProcesses({ transport: effectiveTransport })
+    : [];
   const known = new Set(records.map((record) => record.instanceId));
   const recovered = await recoverOrphanInstances(directory, known, processes);
   const all = [...records, ...recovered];
@@ -428,9 +440,9 @@ export async function listInstances(directory = DEFAULT_INSTANCES_DIR) {
   return merged.sort((a, b) => String(a.startedAt ?? '').localeCompare(String(b.startedAt ?? '')));
 }
 
-export async function terminateRecoveredProcess(record, { force = false } = {}) {
+export async function terminateRecoveredProcess(record, { force = false, transport = null } = {}) {
   if (!record?.processOnly || !Number.isInteger(record.pid) || record.pid <= 0) throw new Error('Process-only recovery metadata is required.');
-  const current = (await discoverAgentProcesses()).find((item) => item.pid === record.pid);
+  const current = (await discoverAgentProcesses({ transport })).find((item) => item.pid === record.pid);
   if (!current || current.command !== record.processCommand || current.cwd !== record.processCwd || current.workspace !== record.workspace) {
     throw new Error('Recovered bdxa process identity changed; refusing to signal the PID.');
   }
@@ -511,8 +523,8 @@ export async function releaseInstanceName(name, instanceId, directory = DEFAULT_
   }
 }
 
-export async function findInstance(identifier, directory = DEFAULT_INSTANCES_DIR) {
-  const records = await listInstances(directory);
+export async function findInstance(identifier, directory = DEFAULT_INSTANCES_DIR, options = {}) {
+  const records = await listInstances(directory, options);
   const needle = String(identifier ?? '').trim();
   if (!needle) throw new Error('Instance name or ID is required.');
 

@@ -56,7 +56,7 @@ export async function startInstanceControl({ instanceId, directory = DEFAULT_INS
 
       if (message.command === 'shutdown') {
         socket.end(`${JSON.stringify({ ok: true, instanceId, stopping: true })}\n`);
-        setImmediate(() => { void onShutdown?.(); });
+        setImmediate(() => { void onShutdown?.(message); });
         return;
       }
 
@@ -77,7 +77,7 @@ export async function startInstanceControl({ instanceId, directory = DEFAULT_INS
             return;
           }
         } catch (error) {
-          socket.end(`${JSON.stringify({ ok: false, instanceId, error: error?.message ?? String(error) })}\n`);
+          socket.end(`${JSON.stringify({ ok: false, instanceId, error: error?.message ?? String(error), code: error?.code, details: error?.details })}\n`);
           return;
         }
       }
@@ -107,7 +107,7 @@ export async function startInstanceControl({ instanceId, directory = DEFAULT_INS
   };
 }
 
-function requestControlEndpoint(endpoint, payload, timeoutMs = 1000) {
+function requestControlEndpoint(endpoint, payload, timeoutMs = 1000, signal = null) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(endpoint);
     let buffer = '';
@@ -116,12 +116,23 @@ function requestControlEndpoint(endpoint, payload, timeoutMs = 1000) {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
       callback();
+    };
+    const onAbort = () => {
+      socket.destroy();
+      finish(() => reject(Object.assign(new Error('Instance control request aborted'), { code: 'INSTANCE_CONTROL_ABORTED' })));
     };
     const timeout = setTimeout(() => {
       socket.destroy();
       finish(() => reject(Object.assign(new Error('Instance control request timed out'), { code: 'INSTANCE_CONTROL_TIMEOUT' })));
     }, timeoutMs);
+
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     socket.setEncoding('utf8');
     socket.once('error', (error) => finish(() => reject(error)));
@@ -145,9 +156,9 @@ export async function identifyInstanceControl(endpoint, { timeoutMs = 500 } = {}
   return requestControlEndpoint(endpoint, { command: 'identify' }, timeoutMs);
 }
 
-export async function requestInstanceControl(record, command, { timeoutMs = 1000, payload = {} } = {}) {
+export async function requestInstanceControl(record, command, { timeoutMs = 1000, payload = {}, signal = null } = {}) {
   const endpoint = record.controlPath || instanceControlPath(record.instanceId);
-  return requestControlEndpoint(endpoint, { command, instanceId: record.instanceId, ...payload }, timeoutMs);
+  return requestControlEndpoint(endpoint, { command, instanceId: record.instanceId, ...payload }, timeoutMs, signal);
 }
 
 export async function probeInstanceControl(record, options) {

@@ -1,6 +1,7 @@
 import { getDeviceMe } from '../../transport/cloud.js';
 import { isCredentialExpired, loadCredentials } from '../../utils/credentials.js';
 import { listInstances } from '../../utils/instances.js';
+import { cloudEnvironment } from '../../runtime/environment.js';
 
 function maskedPrefix(value, fallback) {
   if (typeof value === 'string' && value.trim()) return `${value.trim()}••••`;
@@ -29,8 +30,9 @@ function printCredentialExpiries(credentials, remote = null) {
 
 export async function runStatus() {
   const credentials = await loadCredentials();
-  const localInstances = await listInstances();
-  const activeInstances = localInstances.filter((instance) => instance.live);
+  const environment = cloudEnvironment();
+  const cloudInstances = await listInstances(environment.instancesDirectory, { transport: environment.kind });
+  const activeInstances = cloudInstances.filter((instance) => instance.live);
   console.log('Buildifyx Desktop Agent');
   console.log('');
 

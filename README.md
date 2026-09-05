@@ -1,11 +1,11 @@
 # Buildifyx Desktop Agent
 
-Buildifyx Desktop Agent (`bdxa`) connects one or more local workspaces to Buildifyx Cloud so ChatGPT can use approved MCP tools on the user's computer.
+Buildifyx Desktop Agent (`bdxa`) exposes one or more user-controlled workspaces through Buildifyx Cloud or an authenticated Local MCP gateway while keeping tool permissions enforced on the user's computer.
 
 Current package:
 
 ```text
-@buildifyx/desktop-agent@0.3.0
+@buildifyx/desktop-agent@0.3.1
 ```
 
 Default cloud:
@@ -14,7 +14,7 @@ Default cloud:
 https://bdxa.buildifyx.com
 ```
 
-`bdxa` 0.2 is cloud-only. The previous local MCP HTTP mode has been removed.
+`bdxa` uses Cloud mode by default. Local MCP is opt-in through `bdxa local`, uses no Cloud login, and keeps its persistent state isolated under `~/.buildifyx/local/`.
 
 ## Install
 
@@ -29,7 +29,35 @@ bdxa --version
 bdxa doctor
 ```
 
-## Sign in
+## Cloud and Local modes
+
+Cloud remains the default mode:
+
+```bash
+bdxa login
+bdxa -d --name backend
+```
+
+Cloud requires device login and connects to Buildifyx Cloud. Existing Cloud state remains under `~/.buildifyx/`.
+
+Local mode does not use Cloud credentials or the Cloud web console. Start its loopback-only MCP gateway first, then start workspaces with `local` after `bdxa`:
+
+```bash
+bdxa local up                 # default 127.0.0.1:3333
+bdxa local up 3000            # custom port
+bdxa local token              # bearer token for the MCP client
+
+bdxa local -d --name backend
+bdxa local ls
+bdxa local restart --all
+bdxa local down
+```
+
+Local MCP clients connect to `http://127.0.0.1:<port>/mcp` and must send `Authorization: Bearer <token>`. Rotate the token with `bdxa local token --rotate`; the previous token stops working immediately. The gateway binds only to loopback and validates Host/Origin in addition to bearer authentication. Local instances, policies, logs, audit data, and autostart profiles stay under `~/.buildifyx/local/`. Local management uses the same CLI/TUI implementation as Cloud; there is no Local web management UI.
+
+`bdxa local` and other Local instance commands require the Local gateway to be running. `bdxa local down` gracefully stops Local workspaces and the gateway. Background instance records/settings are preserved for `bdxa local start <name|id>`, while foreground run records are released so the same name can be started again later.
+
+## Sign in (Cloud)
 
 ```bash
 bdxa login
@@ -186,7 +214,7 @@ bdxa rm -f backend
 
 ## Multi-workspace behavior
 
-A single signed-in device may run multiple bdxa 0.2 instances simultaneously:
+A single signed-in device may run multiple Cloud-mode bdxa instances simultaneously:
 
 ```text
 MacBook
@@ -218,7 +246,7 @@ Instance names are claimed atomically. If `backend` is already running, another 
 
 ## ChatGPT workspace selection
 
-Buildifyx Cloud exposes:
+Buildifyx Cloud and Local MCP expose the same shared tool definitions:
 
 ```text
 list_workspaces
@@ -240,7 +268,7 @@ A Cloud restart clears in-memory MCP session bindings; the client can reconnect 
 
 ## Protocol v2
 
-bdxa 0.2 sends:
+Current Cloud-mode bdxa sends:
 
 ```json
 {
@@ -307,7 +335,7 @@ bdxa --unrestricted-commands
 
 ## MCP tools
 
-Cloud exposes:
+Cloud and Local MCP expose the same shared tool definitions:
 
 ```text
 list_workspaces
@@ -324,13 +352,9 @@ The local agent executes the machine-facing tools only after the request passes 
 
 ## Audit log
 
-Local activity is appended to:
+Cloud-mode agent activity is appended to `~/.buildifyx/audit.log`. Local-mode activity is isolated in `~/.buildifyx/local/audit.log`.
 
-```text
-~/.buildifyx/audit.log
-```
-
-Events from bdxa 0.2 include instance context containing the instance ID, workspace name, and workspace path so activity from multiple terminals can be distinguished.
+Audit events include instance context containing the instance ID, workspace name, workspace path, and transport context where applicable so activity from multiple terminals can be distinguished.
 
 ## Status
 
@@ -338,7 +362,7 @@ Events from bdxa 0.2 include instance context containing the instance ID, worksp
 bdxa status
 ```
 
-Shows device authentication/Cloud reachability and the number of active local instances. Use `bdxa ls` to inspect individual workspaces.
+Shows device authentication/Cloud reachability and the number of active Cloud-mode instances. Use `bdxa ls` to inspect Cloud workspaces; use `bdxa local status` or `bdxa local ls` for Local mode.
 
 The foreground TUI also follows the real Cloud state and displays connecting, connected, reconnecting, disconnected, or revoked rather than assuming the socket is connected.
 
@@ -361,7 +385,7 @@ bdxa update
 bdxa update --restart
 ```
 
-`bdxa update` installs the latest public package globally. `bdxa update --restart` performs the update and then restarts every running background instance so it launches from the installed package version; foreground instances are skipped. Set `BUILDIFYX_SKIP_UPDATE_CHECK=1` only when an automated or offline environment must skip the startup version check.
+`bdxa update` installs the latest public package globally. `bdxa update --restart` updates the package, restarts running Cloud background instances, and—when the Local gateway is active—restarts that gateway on the same port and then restarts running Local background instances. Foreground instances and stopped instances are not started automatically. Set `BUILDIFYX_SKIP_UPDATE_CHECK=1` only when an automated or offline environment must skip the startup version check.
 
 ## Useful commands
 
@@ -386,15 +410,23 @@ bdxa status
 bdxa doctor
 bdxa update
 bdxa update --restart
+
+bdxa local up
+bdxa local token
+bdxa local -d --name backend
+bdxa local ls
+bdxa local restart --all
+bdxa local down
 bdxa --version
 ```
 
 ## Security notes
 
 - Buildifyx Cloud does not bypass the local permission system.
+- Local MCP binds only to loopback and requires the bearer token stored privately under `~/.buildifyx/local/auth.json`; rotate it with `bdxa local token --rotate`.
 - Device credentials are separate from login tokens.
-- Each v0.2 process has a separate instance identity and workspace root.
-- Tool arguments received from Cloud are validated again by the local Agent before permission evaluation or execution.
+- Each running workspace process has a separate instance identity and workspace root.
+- Tool arguments received through Cloud or Local MCP are validated again by the local Agent before permission evaluation or execution.
 - Outside-workspace scope and operation permissions are independent gates; allowing a location cannot override a denied write, command, or dangerous-operation policy.
 - Remote Cloud origins must use HTTPS/WSS. Plain HTTP/WS is accepted only for loopback development endpoints such as `localhost` and `127.0.0.1`.
 - The runtime stops accepting new tool calls as soon as shutdown begins, and duplicate active/recent request IDs are rejected to prevent replayed side effects.

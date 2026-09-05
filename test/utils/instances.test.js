@@ -238,12 +238,23 @@ test('instance name claims are atomic and can be released', async () => {
 test('process parser recognizes agent invocations and ignores management commands', () => {
   assert.deepEqual(
     parseBdxaAgentProcessCommand('node /opt/node_modules/@buildifyx/desktop-agent/src/cli.js --root /tmp/backend --instance-id inst_abc --instance-name backend --background-child'),
-    { instanceId: 'inst_abc', name: 'backend', root: '/tmp/backend', mode: 'background' }
+    { transport: 'cloud', instanceId: 'inst_abc', name: 'backend', root: '/tmp/backend', mode: 'background' }
   );
   assert.deepEqual(
     parseBdxaAgentProcessCommand('node ./src/cli.js'),
-    { instanceId: null, name: null, root: null, mode: 'foreground' }
+    { transport: 'cloud', instanceId: null, name: null, root: null, mode: 'foreground' }
   );
+  assert.deepEqual(
+    parseBdxaAgentProcessCommand('node ./src/cli.js local --root /tmp/local --instance-id inst_local --instance-name local-workspace --background-child'),
+    { transport: 'local', instanceId: 'inst_local', name: 'local-workspace', root: '/tmp/local', mode: 'background' }
+  );
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js local up'), null);
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js local token'), null);
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js local token --rotate'), null);
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js local future-command'), null);
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js local ls'), null);
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js local restart --all'), null);
+  assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js __local-gateway --port 3333'), null);
   assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js ls'), null);
   assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js restart --all'), null);
   assert.equal(parseBdxaAgentProcessCommand('node ./src/cli.js status'), null);

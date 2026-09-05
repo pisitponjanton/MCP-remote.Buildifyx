@@ -35,8 +35,19 @@ Account and maintenance:
   bdxa status                  Check device authentication status
   bdxa doctor                  Check the local agent environment
   bdxa update                  Update Buildifyx Desktop Agent from npm
-  bdxa update --restart        Update, then restart all running background instances
+  bdxa update --restart        Update, then restart running Cloud/Local background instances
   bdxa help                    Show this help message
+
+Local MCP (isolated from Cloud):
+  bdxa local up [port]         Start the local MCP gateway (default: 3333)
+  bdxa local token             Show the local MCP bearer token
+  bdxa local token --rotate    Rotate the local MCP bearer token
+  bdxa local                   Run this workspace locally (gateway must already be up)
+  bdxa local -d                Run this workspace locally in the background
+  bdxa local ls                List local instances
+  bdxa local restart --all     Restart local background instances
+  bdxa local down              Stop local instances and the local gateway
+  bdxa local help              Show all local commands
 
 Options:
   -d, --detach                 Run as a detached background instance; does not enable autostart
@@ -63,6 +74,6 @@ Examples:
 
 Background and autostart are separate. Starting with -d only keeps the process in the background for the current boot/session. Autostart is opt-in per instance and remains enabled across stop/restart until explicitly disabled or the instance is removed. bdxa stop preserves the instance record, policy, and autostart setting. bdxa rm deletes the instance record, local policy, and its autostart entry.
 
-Each instanceId owns its own Permissions, additional allowed roots, and command rules, even when multiple instances use the same workspace path. New instances start from defaults. Foreground Ctrl+C removes the running registry record but does not reset the policy unless the instance is explicitly removed. Foreground → background handoff and bdxa attach keep the same instanceId and therefore preserve that instance's settings. Buildifyx Desktop Agent 0.2+ connects through Buildifyx Cloud only.
+Each instanceId owns its own Permissions, additional allowed roots, and command rules, even when multiple instances use the same workspace path. New instances start from defaults. Foreground Ctrl+C removes the running registry record but does not reset the policy unless the instance is explicitly removed. Foreground → background handoff and bdxa attach keep the same instanceId and therefore preserve that instance's settings. Cloud remains the default mode and requires device login. Local MCP is opt-in through bdxa local and keeps its state isolated under ~/.buildifyx/local.
 `);
 }

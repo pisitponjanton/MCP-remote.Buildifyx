@@ -345,15 +345,16 @@ test('restart child control failure preserves the existing instance policy', asy
   }
 });
 
-test('local command reports that legacy local MCP mode was removed', async () => {
+test('local workspace requires the local gateway before starting', async () => {
   const fixture = await setupFixture();
   try {
     const child = spawnCli(['local'], fixture);
     const output = collect(child);
     const [code] = await once(child, 'exit');
     assert.equal(code, 1);
-    assert.match(output().stderr, /Local MCP mode has been removed/);
-    assert.doesNotMatch(output().stderr, /Unknown command/);
+    assert.match(output().stderr, /Local gateway is not running/);
+    assert.match(output().stderr, /bdxa local up/);
+    assert.doesNotMatch(output().stderr, /sign in|login/i);
   } finally {
     await cleanupFixture(fixture);
   }

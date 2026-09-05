@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { rm as removeFile } from 'node:fs/promises';
 import os from 'node:os';
 import process from 'node:process';
@@ -8,6 +7,8 @@ import { createPolicyManager } from '../../permissions/manager.js';
 import { instancePolicyPath, loadInstancePolicy, resetInstancePolicy } from '../../permissions/store.js';
 import { isInstanceAutostartEnabled, removeInstanceAutostart, setInstanceAutostart } from '../../services/autostart.js';
 import { createManagementHandler, MANAGEMENT_ACTIONS } from '../../services/management.js';
+import { cloudEnvironment } from '../../runtime/environment.js';
+import { approvalForDashboard, hasInFlightTools, notifyHandoffActive, prepareHandoffChild, startDetachedInstance, waitForHandoffActivation } from '../../runtime/instance-process.js';
 import { startTui } from '../../tui/index.js';
 import { createToolManifest } from '../../transport/mcp/tools/registry.js';
 import { defaultToolManifestPath, inspectToolManifest } from '../../transport/mcp/manifest-store.js';
@@ -18,7 +19,6 @@ import {
   claimInstanceName,
   createInstanceId,
   loadInstance,
-  openInstanceLog,
   releaseInstanceName,
   removeInstanceRecord,
   saveInstance,
@@ -31,7 +31,6 @@ import { runLogin } from './login.js';
 
 const POLICY_CATEGORIES = new Set(['read', 'write', 'command', 'dangerous', 'outsideRoot']);
 const POLICY_ACTIONS = new Set(['allow', 'ask', 'deny']);
-const HANDOFF_TIMEOUT_MS = 8000;
 
 async function ensureCredentials() {
   let credentials = await loadCredentials();
@@ -58,183 +57,9 @@ async function ensureCredentials() {
   return credentials;
 }
 
-function approvalForDashboard(request) {
-  return {
-    id: request.id,
-    requestId: request.requestId,
-    createdAt: request.createdAt,
-    toolName: request.toolName,
-    description: request.description,
-    category: request.category,
-    pathInfo: request.pathInfo ? { ...request.pathInfo } : null,
-    evaluation: request.evaluation ? { ...request.evaluation } : null
-  };
-}
-
-function hasInFlightTools(events) {
-  const active = new Set();
-  for (const event of events) {
-    if (!event.requestId) continue;
-    if (event.type === 'tool.started') active.add(event.requestId);
-    if (event.type === 'tool.completed' || event.type === 'tool.failed') active.delete(event.requestId);
-  }
-  return active.size > 0;
-}
-
-function waitForChildMessage(child, expectedType, instanceId, timeoutMs = HANDOFF_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (callback) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.off('message', onMessage);
-      child.off('exit', onExit);
-      child.off('error', onError);
-      callback();
-    };
-    const onMessage = (message) => {
-      if (message?.type !== expectedType || message?.instanceId !== instanceId) return;
-      finish(() => resolve(message));
-    };
-    const onExit = (code, signal) => finish(() => reject(new Error(`Background handoff child exited before ${expectedType} (${signal ?? code ?? 'unknown'}).`)));
-    const onError = (error) => finish(() => reject(error));
-    const timer = setTimeout(() => finish(() => reject(new Error(`Timed out waiting for background handoff (${expectedType}).`))), timeoutMs);
-    child.on('message', onMessage);
-    child.once('exit', onExit);
-    child.once('error', onError);
-  });
-}
-
-async function prepareHandoffChild({ root, name, instanceId, unrestrictedCommands }) {
-  const script = process.argv[1];
-  if (!script) throw new Error('Could not determine the bdxa CLI entrypoint for background handoff.');
-  const { filePath: logPath, handle } = await openInstanceLog(instanceId);
-  const childArgs = [
-    script,
-    '--root', root,
-    '--instance-id', instanceId,
-    '--instance-name', name,
-    '--background-child',
-    '--handoff-child'
-  ];
-  if (unrestrictedCommands) childArgs.push('--unrestricted-commands');
-
-  let child;
-  try {
-    child = spawn(process.execPath, childArgs, {
-      detached: true,
-      stdio: ['ignore', handle.fd, handle.fd, 'ipc'],
-      windowsHide: true,
-      env: process.env
-    });
-    if (!child.pid) throw new Error('Could not start background handoff process.');
-    await waitForChildMessage(child, 'handoff.ready', instanceId);
-  } catch (error) {
-    child?.kill();
-    throw error;
-  } finally {
-    await handle.close();
-  }
-
-  return {
-    child,
-    logPath,
-    async activate() {
-      const active = waitForChildMessage(child, 'handoff.active', instanceId);
-      child.send({ type: 'handoff.activate', instanceId });
-      const message = await active;
-      child.unref();
-      return { pid: message.pid ?? child.pid, logPath };
-    },
-    cancel() {
-      try { child.send({ type: 'handoff.cancel', instanceId }); } catch {}
-      try { child.kill(); } catch {}
-    }
-  };
-}
-
-async function waitForHandoffActivation(instanceId) {
-  if (typeof process.send !== 'function') throw new Error('Background handoff child requires an IPC channel.');
-  process.send({ type: 'handoff.ready', instanceId, pid: process.pid });
-
-  await new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (callback) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      process.off('message', onMessage);
-      process.off('disconnect', onDisconnect);
-      callback();
-    };
-    const onMessage = (message) => {
-      if (message?.instanceId !== instanceId) return;
-      if (message.type === 'handoff.activate') finish(resolve);
-      else if (message.type === 'handoff.cancel') finish(() => reject(new Error('Background handoff was cancelled.')));
-    };
-    const onDisconnect = () => finish(() => reject(new Error('Background handoff parent disconnected before activation.')));
-    const timer = setTimeout(() => finish(() => reject(new Error('Timed out waiting for foreground handoff activation.'))), 30_000);
-    process.on('message', onMessage);
-    process.once('disconnect', onDisconnect);
-  });
-}
-
-function notifyHandoffActive(instanceId) {
-  if (typeof process.send !== 'function') return;
-  try { process.send({ type: 'handoff.active', instanceId, pid: process.pid }); } catch {}
-  try { process.disconnect(); } catch {}
-}
-
-async function startDetached({ root, name, instanceId, unrestrictedCommands, credentials, metadata }) {
-  const script = process.argv[1];
-  if (!script) throw new Error('Could not determine the bdxa CLI entrypoint for detached mode.');
-  const { filePath: logPath, handle } = await openInstanceLog(instanceId);
-  const childArgs = [script, '--root', root, '--instance-id', instanceId, '--instance-name', name, '--background-child'];
-  if (unrestrictedCommands) childArgs.push('--unrestricted-commands');
-
-  await saveInstance({
-    instanceId,
-    name,
-    workspace: root,
-    mode: 'background',
-    pid: 0,
-    status: 'starting',
-    startedAt: new Date().toISOString(),
-    agentVersion: metadata.version,
-    deviceName: credentials.deviceName ?? credentials.deviceId,
-    unrestrictedCommands,
-    logPath
-  });
-
-  let child;
-  try {
-    child = spawn(process.execPath, childArgs, {
-      detached: true,
-      stdio: ['ignore', handle.fd, handle.fd],
-      windowsHide: true,
-      env: process.env
-    });
-    if (!child.pid) throw new Error('Could not start detached bdxa process.');
-    child.unref();
-    await updateInstance(instanceId, { pid: child.pid });
-  } catch (error) {
-    await removeInstanceRecord(instanceId);
-    await releaseInstanceName(name, instanceId).catch(() => undefined);
-    throw error;
-  } finally {
-    await handle.close();
-  }
-
-  console.log(`✓ Started ${name}`);
-  console.log(`  ID         ${shortInstanceId(instanceId)}`);
-  console.log(`  Workspace  ${root}`);
-  console.log(`  PID        ${child.pid}`);
-  console.log(`  Log        ${logPath}`);
-}
-
 export async function runCloud(args, { metadata: suppliedMetadata, updateStatus = null } = {}) {
   const credentials = await ensureCredentials();
+  const environment = cloudEnvironment();
   const root = await resolveRoot(getOption(args, '--root', process.cwd()));
   const unrestrictedCommands = hasFlag(args, '--unrestricted-commands') || hasFlag(args, '--full-access');
   const backgroundChild = hasFlag(args, '--background-child');
@@ -246,10 +71,10 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
   const suppliedInstanceName = getOption(args, '--instance-name', null);
   const requestedName = suppliedInstanceName ?? getOption(args, '--name', null);
   const instanceId = suppliedInstanceId ?? createInstanceId();
-  const name = suppliedInstanceName ?? await claimInstanceName(root, requestedName, instanceId);
+  const name = suppliedInstanceName ?? await claimInstanceName(root, requestedName, instanceId, environment.instancesDirectory);
 
   if (detach && !backgroundChild) {
-    await startDetached({ root, name, instanceId, unrestrictedCommands, credentials, metadata });
+    await startDetachedInstance({ environment, root, name, instanceId, unrestrictedCommands, metadata, deviceName: credentials.deviceName ?? credentials.deviceId });
     return;
   }
 
@@ -526,7 +351,7 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
   process.once('SIGTERM', onSignal);
 
   requestRemoteRestart = async () => {
-    const prepared = await prepareHandoffChild({ root, name, instanceId, unrestrictedCommands });
+    const prepared = await prepareHandoffChild({ environment, root, name, instanceId, unrestrictedCommands });
     const parentControlPath = control?.endpoint ?? null;
 
     try {
@@ -574,7 +399,7 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
   const handoffToBackground = async () => {
     if (mode !== 'foreground') return;
     if (hasInFlightTools(runtime.eventBus.getHistory())) throw new Error('Wait for the active tool request to finish before moving this workspace to the background.');
-    const prepared = await prepareHandoffChild({ root, name, instanceId, unrestrictedCommands });
+    const prepared = await prepareHandoffChild({ environment, root, name, instanceId, unrestrictedCommands });
     const parentControlPath = control?.endpoint ?? null;
 
     try {

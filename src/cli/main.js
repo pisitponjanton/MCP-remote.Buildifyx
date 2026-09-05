@@ -4,10 +4,14 @@ import { runCloud } from './commands/cloud.js';
 import { runDoctor } from './commands/doctor.js';
 import { runInstanceAttach, runInstanceAutostart, runInstanceInspect, runInstanceList, runInstanceRemove, runInstanceRestart, runInstanceStart, runInstanceStop } from './commands/instances.js';
 import { runLogin } from './commands/login.js';
+import { ensureLocalGatewayForAutostart, runLocal, runLocalGatewayChild } from './commands/local.js';
 import { runLogout } from './commands/logout.js';
 import { runStatus } from './commands/status.js';
 import { runUpdate } from './commands/update.js';
-import { restoreAutostartInstances } from '../services/autostart.js';
+import { getAutostartInstanceIds, restoreAutostartInstances } from '../services/autostart.js';
+import { localEnvironment } from '../runtime/environment.js';
+import { getLocalGatewayStatus, readLocalGatewayConfig, startLocalGateway, stopLocalGateway } from '../local/gateway-control.js';
+import { listInstances } from '../utils/instances.js';
 import { checkForUpdate, formatUpdateNotice, getPackageMetadata } from '../version.js';
 
 function printUpdateNotice(status) {
@@ -24,9 +28,58 @@ async function getInvocationUpdateStatus(command, args, metadata) {
   return checkForUpdate(metadata.name, metadata.version, { timeoutMs: 1200 });
 }
 
-export async function runUpdateCommand(args = [], { update = runUpdate, restart = runInstanceRestart } = {}) {
+export async function runUpdateCommand(args = [], options = {}) {
+  const update = options.update ?? runUpdate;
+  const restartCloud = options.restartCloud ?? options.restart ?? runInstanceRestart;
+  const restartLocal = options.restartLocal ?? runInstanceRestart;
+  const readLocalStatus = options.getLocalGatewayStatus ?? getLocalGatewayStatus;
+  const readLocalConfig = options.readLocalGatewayConfig ?? readLocalGatewayConfig;
+  const listLocalInstances = options.listLocalInstances ?? ((environment) => listInstances(environment.instancesDirectory, { transport: environment.kind }));
+  const stopGateway = options.stopLocalGateway ?? stopLocalGateway;
+  const startGateway = options.startLocalGateway ?? startLocalGateway;
+  const readMetadata = options.getPackageMetadata ?? getPackageMetadata;
+  const restartRequested = args.includes('--restart');
+  const environment = localEnvironment();
+  const localGateway = restartRequested ? await readLocalStatus(environment) : null;
+  const localRunningIds = restartRequested
+    ? (await listLocalInstances(environment))
+      .filter((item) => item.live && item.mode === 'background' && !item.processOnly)
+      .map((item) => item.instanceId)
+    : [];
+  const localConfig = restartRequested && !localGateway?.running && localRunningIds.length
+    ? await readLocalConfig(environment)
+    : null;
+
   await update();
-  if (args.includes('--restart')) await restart(['--all']);
+  if (!restartRequested) return;
+
+  const failures = [];
+  try { await restartCloud(['--all']); }
+  catch (error) { failures.push(`Cloud: ${error?.message ?? String(error)}`); }
+
+  if (localGateway?.running || localRunningIds.length) {
+    let gatewayReady = false;
+    try {
+      if (localGateway?.running) await stopGateway(environment);
+      const metadata = await readMetadata();
+      await startGateway({
+        environment,
+        cliEntry: process.argv[1],
+        port: localGateway?.state?.port ?? localConfig?.port,
+        version: metadata.version
+      });
+      gatewayReady = true;
+    } catch (error) {
+      failures.push(`Local gateway: ${error?.message ?? String(error)}`);
+    }
+
+    if (gatewayReady && localRunningIds.length) {
+      try { await restartLocal(localRunningIds, { environment }); }
+      catch (error) { failures.push(`Local: ${error?.message ?? String(error)}`); }
+    }
+  }
+
+  if (failures.length) throw new Error(`Update completed, but restart failed: ${failures.join('; ')}`);
 }
 
 export async function runCli(argv = process.argv.slice(2)) {
@@ -35,11 +88,20 @@ export async function runCli(argv = process.argv.slice(2)) {
   const updateStatus = await getInvocationUpdateStatus(command, args, metadata);
 
   if (command === '__autostart-restore') {
-    const result = await restoreAutostartInstances();
+    const environment = args[0] === 'local' ? localEnvironment() : undefined;
+    if (environment && (await getAutostartInstanceIds({ environment })).size > 0) {
+      await ensureLocalGatewayForAutostart({ metadata });
+    }
+    const result = await restoreAutostartInstances(environment ? { environment } : {});
     if (result.failed.length) {
       console.error(`Autostart restored ${result.restored} instance(s) with ${result.failed.length} failure(s).`);
       process.exitCode = 1;
     }
+    return;
+  }
+
+  if (command === '__local-gateway') {
+    await runLocalGatewayChild(args, { metadata });
     return;
   }
 
@@ -110,10 +172,13 @@ export async function runCli(argv = process.argv.slice(2)) {
       await runInstanceRemove(args);
       return;
     case 'local':
+      printUpdateNotice(updateStatus);
+      await runLocal(args, { metadata, updateStatus });
+      return;
     case 'remote':
     case 'r':
       printUpdateNotice(updateStatus);
-      throw new Error('Local MCP mode has been removed in bdxa 0.2.0. Run `bdxa` to connect through Buildifyx Cloud.');
+      throw new Error('Legacy remote mode has been removed. Use `bdxa` for Cloud or `bdxa local` for Local MCP.');
     case 'doctor':
     case 'd':
       printUpdateNotice(updateStatus);
