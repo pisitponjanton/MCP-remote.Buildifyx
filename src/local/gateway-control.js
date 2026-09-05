@@ -199,7 +199,6 @@ export async function startLocalGateway({ environment, cliEntry, port = DEFAULT_
       return { ...current, alreadyRunning: true };
     }
     if (current.state) await removeLocalGatewayState(environment);
-    await removeLegacyLocalAuth(environment).catch(() => undefined);
     if (!cliEntry) throw new Error('Could not determine the bdxa CLI entrypoint for local gateway startup.');
 
     await mkdir(environment.rootDirectory, { recursive: true, mode: 0o700 });
@@ -256,6 +255,7 @@ export async function startLocalGateway({ environment, cliEntry, port = DEFAULT_
       throw new Error(`Local gateway did not become ready on port ${requestedPort}. Check ${logPath}.`);
     }
     await removeLocalGatewayStartup(environment).catch(() => undefined);
+    await removeLegacyLocalAuth(environment).catch(() => undefined);
     await writeLocalGatewayConfig(environment, { port: requestedPort });
     return { ...startup.status, alreadyRunning: false };
   } finally {

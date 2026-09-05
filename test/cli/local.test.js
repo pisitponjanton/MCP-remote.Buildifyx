@@ -474,11 +474,14 @@ test('local MCP session count is bounded and evicts the oldest session', async (
   }
 });
 
-test('local gateway fails fast when the requested port is already in use', async () => {
+test('local gateway fails fast on a busy port without deleting legacy auth', async () => {
   const fixture = await setupFixture();
   const port = await freePort();
   const holder = net.createServer((socket) => socket.destroy());
+  const legacyAuthPath = path.join(fixture.buildifyxHome, 'local', 'auth.json');
   try {
+    await mkdir(path.dirname(legacyAuthPath), { recursive: true });
+    await writeFile(legacyAuthPath, JSON.stringify({ version: 1, token: 'legacy-token' }));
     await new Promise((resolve, reject) => {
       holder.once('error', reject);
       holder.listen(port, '127.0.0.1', resolve);
@@ -489,6 +492,7 @@ test('local gateway fails fast when the requested port is already in use', async
     assert.equal(result.code, 1);
     assert.match(result.stderr, new RegExp(`port ${port} is already in use`, 'i'));
     assert.ok(elapsedMs < 3000, `expected fail-fast startup, got ${elapsedMs}ms`);
+    assert.equal(JSON.parse(await readFile(legacyAuthPath, 'utf8')).token, 'legacy-token');
   } finally {
     await new Promise((resolve) => holder.close(() => resolve())).catch(() => undefined);
     await cleanupFixture(fixture);
