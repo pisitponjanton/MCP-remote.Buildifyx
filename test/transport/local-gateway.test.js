@@ -24,13 +24,14 @@ test('local gateway child argv never contains the shutdown control secret', () =
   assert.deepEqual(args, ['/opt/bdxa/src/cli.js', '__local-gateway', '--port', '3333', '--gateway-id', 'localgw_test']);
   assert.equal(args.includes('--control-token'), false);
 });
-test('local gateway accepts only loopback Host and Origin values', () => {
+test('local gateway accepts forwarded tunnel hosts but rejects non-loopback browser origins', () => {
   assert.equal(isAllowedLocalRequest(request('127.0.0.1:3333')), true);
+  assert.equal(isAllowedLocalRequest(request('example.ngrok.app')), true);
+  assert.equal(isAllowedLocalRequest(request('tunnel.example.com:443')), true);
   assert.equal(isAllowedLocalRequest(request('localhost:3333', 'http://localhost:3000')), true);
   assert.equal(isAllowedLocalRequest(request('[::1]:3333', 'http://[::1]:3000')), true);
-  assert.equal(isAllowedLocalRequest(request('example.com:3333')), false);
-  assert.equal(isAllowedLocalRequest(request('127.0.0.1:3333', 'https://example.com')), false);
-  assert.equal(isAllowedLocalRequest(request('127.0.0.2:3333')), false);
+  assert.equal(isAllowedLocalRequest(request('example.ngrok.app', 'https://example.com')), false);
+  assert.equal(isAllowedLocalRequest(request('127.0.0.1:3333', 'not-a-url')), false);
 });
 
 test('local gateway port config defaults to 3333 and persists an explicit port privately', async () => {

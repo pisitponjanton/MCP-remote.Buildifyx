@@ -39,9 +39,7 @@ Account and maintenance:
   bdxa help                    Show this help message
 
 Local MCP (isolated from Cloud):
-  bdxa local up [port]         Start the local MCP gateway (default: 3333)
-  bdxa local token             Show the local MCP bearer token
-  bdxa local token --rotate    Rotate the local MCP bearer token
+  bdxa local up [port]         Start the No Auth local MCP gateway (default: 3333)
   bdxa local                   Run this workspace locally (gateway must already be up)
   bdxa local -d                Run this workspace locally in the background
   bdxa local ls                List local instances
@@ -74,6 +72,6 @@ Examples:
 
 Background and autostart are separate. Starting with -d only keeps the process in the background for the current boot/session. Autostart is opt-in per instance and remains enabled across stop/restart until explicitly disabled or the instance is removed. bdxa stop preserves the instance record, policy, and autostart setting. bdxa rm deletes the instance record, local policy, and its autostart entry.
 
-Each instanceId owns its own Permissions, additional allowed roots, and command rules, even when multiple instances use the same workspace path. New instances start from defaults. Foreground Ctrl+C removes the running registry record but does not reset the policy unless the instance is explicitly removed. Foreground → background handoff and bdxa attach keep the same instanceId and therefore preserve that instance's settings. Cloud remains the default mode and requires device login. Local MCP is opt-in through bdxa local and keeps its state isolated under ~/.buildifyx/local.
+Each instanceId owns its own Permissions, additional allowed roots, and command rules, even when multiple instances use the same workspace path. New instances start from defaults. Foreground Ctrl+C removes the running registry record but does not reset the policy unless the instance is explicitly removed. Foreground → background handoff and bdxa attach keep the same instanceId and therefore preserve that instance's settings. Cloud remains the default mode and requires device login. Local MCP uses No Auth, listens only on 127.0.0.1, and keeps its state isolated under ~/.buildifyx/local. Expose the Local port through your own HTTPS tunnel/reverse proxy when a remote MCP client needs access.
 `);
 }

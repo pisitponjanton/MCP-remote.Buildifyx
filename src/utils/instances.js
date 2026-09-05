@@ -13,7 +13,7 @@ import { buildifyxHome } from './home.js';
 export const DEFAULT_INSTANCES_DIR = path.join(buildifyxHome(), 'instances');
 const PACKAGE_NAME = '@buildifyx/desktop-agent';
 const MANAGEMENT_COMMANDS = new Set(['login', 'logout', 'status', 'ls', 'ps', 'inspect', 'attach', 'start', 'restart', 'stop', 'autostart', 'rm', 'doctor', 'd', 'update', 'u', 'help', '-h', '--help', '-v', '--version', 'remote', 'r', '__autostart-restore', '__local-gateway']);
-const LOCAL_MANAGEMENT_COMMANDS = new Set(['up', 'status', 'token', 'down', 'ls', 'ps', 'inspect', 'attach', 'start', 'restart', 'stop', 'autostart', 'rm', 'help', '-h', '--help']);
+const LOCAL_MANAGEMENT_COMMANDS = new Set(['up', 'status', 'down', 'ls', 'ps', 'inspect', 'attach', 'start', 'restart', 'stop', 'autostart', 'rm', 'help', '-h', '--help']);
 
 function isManagedInstancesDirectory(directory, transport = 'cloud') {
   if (process.env.BUILDFYX_HOME?.trim()) return false;

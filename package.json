@@ -1,7 +1,7 @@
 {
   "name": "@buildifyx/desktop-agent",
   "version": "0.3.1",
-  "description": "Buildifyx desktop agent for securely running MCP tools through Buildifyx Cloud or an authenticated local gateway.",
+  "description": "Buildifyx desktop agent for securely running MCP tools through Buildifyx Cloud or a loopback-only Local MCP gateway.",
   "type": "module",
   "bin": {
     "bdxa": "src/cli.js",

@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { getOrCreateLocalMcpToken } from './auth.js';
 
 export const DEFAULT_LOCAL_PORT = 3333;
 
@@ -41,7 +40,7 @@ export async function removeLocalGatewayStartup(environment) {
   await rm(localGatewayStartupPath(environment), { force: true });
 }
 
-async function acquireGatewayStartupLock(environment, timeoutMs = 6500) {
+async function acquireGatewayStartupLock(environment, timeoutMs = 15_000) {
   const filePath = localGatewayLockPath(environment);
   const lockId = `lock_${randomUUID()}`;
   const deadline = Date.now() + timeoutMs;
@@ -167,7 +166,7 @@ export async function getLocalGatewayStatus(environment) {
   return { running: true, state, health };
 }
 
-async function waitForGateway(environment, gatewayId, timeoutMs = 5000) {
+async function waitForGateway(environment, gatewayId, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const status = await getLocalGatewayStatus(environment);
@@ -192,7 +191,6 @@ export async function startLocalGateway({ environment, cliEntry, port = DEFAULT_
     if (!cliEntry) throw new Error('Could not determine the bdxa CLI entrypoint for local gateway startup.');
 
     await mkdir(environment.rootDirectory, { recursive: true, mode: 0o700 });
-    await getOrCreateLocalMcpToken(environment);
     const gatewayId = `localgw_${randomUUID()}`;
     const controlToken = randomBytes(32).toString('hex');
     const logPath = localGatewayLogPath(environment);

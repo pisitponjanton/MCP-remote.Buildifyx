@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -144,15 +144,10 @@ test('local gateway and instance lifecycle stay isolated from Cloud state', asyn
   }
 });
 
-async function localToken(fixture) {
-  const parsed = JSON.parse(await readFile(path.join(fixture.buildifyxHome, 'local', 'auth.json'), 'utf8'));
-  return parsed.token;
-}
-
-async function initializeMcp(port, token) {
+async function initializeMcp(port) {
   const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` },
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
     body: JSON.stringify({
       jsonrpc: '2.0',
       id: 1,
@@ -167,14 +162,13 @@ async function initializeMcp(port, token) {
   return sessionId;
 }
 
-async function mcpCall(port, sessionId, token, id, method, params) {
+async function mcpCall(port, sessionId, id, method, params) {
   const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
-      'mcp-session-id': sessionId,
-      authorization: `Bearer ${token}`
+      'mcp-session-id': sessionId
     },
     body: JSON.stringify({ jsonrpc: '2.0', id, method, params })
   });
@@ -191,27 +185,26 @@ test('one local MCP port routes shared tools to multiple local instances', async
     assert.equal((await runCli(['local', '-d', '--root', fixture.workspaceB, '--name', 'local-b'], fixture)).code, 0);
     await waitFor(async () => (await localRecords(fixture)).filter((item) => item.status === 'connected').length === 2);
 
-    const token = await localToken(fixture);
-    const sessionId = await initializeMcp(port, token);
-    const tools = await mcpCall(port, sessionId, token, 2, 'tools/list', {});
+    const sessionId = await initializeMcp(port);
+    const tools = await mcpCall(port, sessionId, 2, 'tools/list', {});
     const names = tools.result.tools.map((item) => item.name).sort();
     const expected = ['list_workspaces', 'use_workspace', ...getMcpToolDefinitions().map((item) => item.name)].sort();
     assert.deepEqual(names, expected);
 
-    const listed = await mcpCall(port, sessionId, token, 3, 'tools/call', { name: 'list_workspaces', arguments: {} });
+    const listed = await mcpCall(port, sessionId, 3, 'tools/call', { name: 'list_workspaces', arguments: {} });
     assert.equal(listed.result.structuredContent.workspaces.length, 2);
     assert.equal(listed.result.structuredContent.devices.length, 1);
 
-    const readA = await mcpCall(port, sessionId, token, 4, 'tools/call', {
+    const readA = await mcpCall(port, sessionId, 4, 'tools/call', {
       name: 'read_file', arguments: { workspace: 'local-a', path: 'which.txt' }
     });
     assert.equal(readA.result.structuredContent.content, 'workspace-a\n');
 
-    const selected = await mcpCall(port, sessionId, token, 5, 'tools/call', {
+    const selected = await mcpCall(port, sessionId, 5, 'tools/call', {
       name: 'use_workspace', arguments: { workspace: 'local-b' }
     });
     assert.equal(selected.result.structuredContent.selected.name, 'local-b');
-    const readSelected = await mcpCall(port, sessionId, token, 6, 'tools/call', {
+    const readSelected = await mcpCall(port, sessionId, 6, 'tools/call', {
       name: 'read_file', arguments: { path: 'which.txt' }
     });
     assert.equal(readSelected.result.structuredContent.content, 'workspace-b\n');
@@ -374,45 +367,30 @@ ${second.stdout}`;
     await cleanupFixture(fixture);
   }
 });
-test('local MCP requires a bearer token and rotation invalidates the old token immediately', async () => {
+test('local MCP uses No Auth while internal gateway shutdown stays protected', async () => {
   const fixture = await setupFixture();
   const port = await freePort();
   try {
-    assert.equal((await runCli(['local', 'up', String(port)], fixture)).code, 0);
-    const token = await localToken(fixture);
-    assert.ok(token.length >= 32);
-    if (process.platform !== 'win32') {
-      const mode = (await stat(path.join(fixture.buildifyxHome, 'local', 'auth.json'))).mode & 0o777;
-      assert.equal(mode, 0o600);
-    }
+    const up = await runCli(['local', 'up', String(port)], fixture);
+    assert.equal(up.code, 0, up.stderr);
+    assert.match(up.stdout, /Auth\s+No Auth/);
+    await assert.rejects(readFile(path.join(fixture.buildifyxHome, 'local', 'auth.json'), 'utf8'), { code: 'ENOENT' });
 
-    const body = JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'initialize',
-      params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'auth-test', version: '1' } }
-    });
-    const noAuth = await fetch(`http://127.0.0.1:${port}/mcp`, {
-      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body
-    });
-    assert.equal(noAuth.status, 401);
-    const wrongAuth = await fetch(`http://127.0.0.1:${port}/mcp`, {
-      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: 'Bearer wrong' }, body
-    });
-    assert.equal(wrongAuth.status, 401);
-    assert.ok(await initializeMcp(port, token));
+    const sessionId = await initializeMcp(port);
+    assert.ok(sessionId);
 
-    const shown = await runCli(['local', 'token'], fixture);
-    assert.equal(shown.code, 0, shown.stderr);
-    assert.match(shown.stdout, new RegExp(token));
-    const rotated = await runCli(['local', 'token', '--rotate'], fixture);
-    assert.equal(rotated.code, 0, rotated.stderr);
-    const nextToken = await localToken(fixture);
-    assert.notEqual(nextToken, token);
+    const status = await runCli(['local', 'status'], fixture);
+    assert.equal(status.code, 0, status.stderr);
+    assert.match(status.stdout, /Auth\s+No Auth/);
 
-    const oldAfterRotate = await fetch(`http://127.0.0.1:${port}/mcp`, {
-      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` }, body
-    });
-    assert.equal(oldAfterRotate.status, 401);
-    assert.ok(await initializeMcp(port, nextToken));
+    const removedTokenCommand = await runCli(['local', 'token'], fixture);
+    assert.equal(removedTokenCommand.code, 1);
+    assert.match(removedTokenCommand.stderr, /Unknown local command: token/);
+
+    const denied = await fetch(`http://127.0.0.1:${port}/_bdxa/shutdown`, { method: 'POST' });
+    assert.equal(denied.status, 403);
+    const health = await fetch(`http://127.0.0.1:${port}/health`);
+    assert.equal(health.status, 200);
   } finally {
     await cleanupFixture(fixture);
   }
@@ -426,12 +404,10 @@ test('local MCP cancellation stops an active runtime command', async () => {
     assert.equal((await runCli(['local', '-d', '--unrestricted-commands', '--root', fixture.workspaceA, '--name', 'cancel-local'], fixture)).code, 0);
     await waitFor(async () => (await localRecords(fixture)).some((item) => item.name === 'cancel-local' && item.status === 'connected'));
 
-    const token = await localToken(fixture);
-    const sessionId = await initializeMcp(port, token);
+    const sessionId = await initializeMcp(port);
     const headers = {
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
-      authorization: `Bearer ${token}`,
       'mcp-session-id': sessionId
     };
     const controller = new AbortController();

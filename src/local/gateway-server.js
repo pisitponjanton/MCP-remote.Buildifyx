@@ -9,7 +9,6 @@ import { requestInstanceControl } from '../utils/instance-control.js';
 import { getMcpToolDefinitions } from '../transport/mcp/tools/registry.js';
 import { errorResult, successResult } from '../transport/mcp/response.js';
 import { resolveWorkspaceTarget, selectedTarget, workspaceSummary } from './workspace-routing.js';
-import { localBearerToken, readLocalMcpToken, tokenMatches } from './auth.js';
 import { AgentError, ErrorCode } from '../core/errors.js';
 
 const SESSION_IDLE_MS = 24 * 60 * 60 * 1000;
@@ -26,9 +25,6 @@ function isLoopbackName(value) {
 }
 
 export function isAllowedLocalRequest(req) {
-  const hostHeader = String(req.headers.host ?? '');
-  const host = hostHeader.startsWith('[') ? hostHeader.split(']')[0] + ']' : hostHeader.split(':')[0];
-  if (host && !isLoopbackName(host)) return false;
   const origin = req.headers.origin;
   if (!origin) return true;
   try { return isLoopbackName(new URL(origin).hostname); } catch { return false; }
@@ -225,12 +221,6 @@ export function createLocalGateway({ environment, version, gatewayId, controlTok
           return;
         }
         if (url.pathname === '/mcp') {
-          const mcpToken = await readLocalMcpToken(environment);
-          if (!mcpToken || !tokenMatches(localBearerToken(req), mcpToken)) {
-            res.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': 'Bearer' });
-            res.end(JSON.stringify({ error: 'LOCAL_MCP_UNAUTHORIZED' }));
-            return;
-          }
           await handleMcp(req, res);
           return;
         }

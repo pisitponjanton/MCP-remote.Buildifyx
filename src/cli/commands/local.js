@@ -1,5 +1,4 @@
 import process from 'node:process';
-import { getOrCreateLocalMcpToken, rotateLocalMcpToken } from '../../local/auth.js';
 import { createLocalGateway } from '../../local/gateway-server.js';
 import {
   DEFAULT_LOCAL_PORT,
@@ -28,7 +27,7 @@ import {
 import { runLocalInstance } from './local-instance.js';
 
 function printLocalHelp() {
-  console.log(`bdxa local — Local MCP mode\n\nUsage:\n  bdxa local up [port]             Start the local MCP gateway (default: 3333)\n  bdxa local status                Show local gateway and workspace status\n  bdxa local token                 Show the local MCP bearer token\n  bdxa local token --rotate        Rotate the local MCP bearer token\n  bdxa local down                  Stop all local workspaces and the gateway\n\nWorkspaces:\n  bdxa local                       Run this workspace in the foreground\n  bdxa local -d                    Run this workspace in the background\n  bdxa local --name <name>         Give the local workspace a stable name\n  bdxa local --root <path>         Use a workspace without changing directory\n\nManage local instances:\n  bdxa local ls                    List local instances\n  bdxa local inspect <name|id>     Show local instance details\n  bdxa local attach <name|id>      Open the shared terminal dashboard\n  bdxa local start <name|id...>    Start stopped local instances\n  bdxa local restart <name|id...>  Restart local background instances\n  bdxa local restart --all         Restart all running local background instances\n  bdxa local stop <name|id...>     Stop local background instances\n  bdxa local stop --all            Stop all local background instances\n  bdxa local autostart <name|id>   Enable local instance autostart\n  bdxa local autostart off <name|id>\n  bdxa local rm <name|id...>       Remove local instances and their local settings\n  bdxa local rm --all              Remove every local instance\n\nLocal state is isolated under ~/.buildifyx/local. Cloud login, instances, permissions, and autostart are not used by local mode.\n`);
+  console.log(`bdxa local — Local MCP mode\n\nUsage:\n  bdxa local up [port]             Start the local MCP gateway (default: 3333)\n  bdxa local status                Show local gateway and workspace status\n  bdxa local down                  Stop all local workspaces and the gateway\n\nWorkspaces:\n  bdxa local                       Run this workspace in the foreground\n  bdxa local -d                    Run this workspace in the background\n  bdxa local --name <name>         Give the local workspace a stable name\n  bdxa local --root <path>         Use a workspace without changing directory\n\nManage local instances:\n  bdxa local ls                    List local instances\n  bdxa local inspect <name|id>     Show local instance details\n  bdxa local attach <name|id>      Open the shared terminal dashboard\n  bdxa local start <name|id...>    Start stopped local instances\n  bdxa local restart <name|id...>  Restart local background instances\n  bdxa local restart --all         Restart all running local background instances\n  bdxa local stop <name|id...>     Stop local background instances\n  bdxa local stop --all            Stop all local background instances\n  bdxa local autostart <name|id>   Enable local instance autostart\n  bdxa local autostart off <name|id>\n  bdxa local rm <name|id...>       Remove local instances and their local settings\n  bdxa local rm --all              Remove every local instance\n\nLocal MCP uses No Auth and listens only on 127.0.0.1. Expose the port through your own HTTPS tunnel or reverse proxy when a remote MCP client needs access. Local state is isolated under ~/.buildifyx/local. Cloud login, instances, permissions, and autostart are not used by local mode.\n`);
 }
 
 async function requireGateway(environment) {
@@ -59,16 +58,8 @@ export async function runLocal(args = [], { metadata = null, updateStatus = null
     console.log(`  MCP        http://127.0.0.1:${result.state.port}/mcp`);
     console.log(`  Port       ${result.state.port}`);
     console.log(`  PID        ${result.state.pid}`);
-    console.log('  Auth       Bearer token (`bdxa local token`)');
-    return;
-  }
-
-  if (first === 'token') {
-    if (args.length > 2 || (args[1] && args[1] !== '--rotate')) throw new Error('Usage: bdxa local token [--rotate]');
-    const rotating = args[1] === '--rotate';
-    const token = rotating ? await rotateLocalMcpToken(environment) : await getOrCreateLocalMcpToken(environment);
-    console.log(rotating ? '✓ Local MCP token rotated' : 'Local MCP token');
-    console.log(token);
+    console.log('  Auth       No Auth');
+    console.log('  Remote     Expose this port through your own HTTPS tunnel/reverse proxy');
     return;
   }
 
@@ -83,6 +74,7 @@ export async function runLocal(args = [], { metadata = null, updateStatus = null
       console.log(`MCP         http://127.0.0.1:${gateway.state.port}/mcp`);
       console.log(`Port        ${gateway.state.port}`);
       console.log(`PID         ${gateway.state.pid}`);
+      console.log('Auth        No Auth');
     }
     console.log(`Instances   ${running} running / ${Math.max(0, instances.length - running)} stopped`);
     if (!gateway.running) console.log('\nStart with:\n  bdxa local up');
@@ -98,6 +90,11 @@ export async function runLocal(args = [], { metadata = null, updateStatus = null
     const result = await stopLocalGateway(environment);
     console.log(result.alreadyStopped ? 'Local gateway is already stopped.' : '✓ Local gateway stopped');
     return;
+  }
+
+  const managementCommands = new Set(['ls', 'ps', 'inspect', 'attach', 'start', 'restart', 'stop', 'autostart', 'rm']);
+  if (first && !first.startsWith('-') && !managementCommands.has(first)) {
+    throw new Error(`Unknown local command: ${first}. Run \`bdxa local help\`.`);
   }
 
   await requireGateway(environment);

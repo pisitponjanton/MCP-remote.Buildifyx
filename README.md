@@ -1,6 +1,6 @@
 # Buildifyx Desktop Agent
 
-Buildifyx Desktop Agent (`bdxa`) exposes one or more user-controlled workspaces through Buildifyx Cloud or an authenticated Local MCP gateway while keeping tool permissions enforced on the user's computer.
+Buildifyx Desktop Agent (`bdxa`) exposes one or more user-controlled workspaces through Buildifyx Cloud or a loopback-only Local MCP gateway while keeping tool permissions enforced on the user's computer.
 
 Current package:
 
@@ -45,15 +45,13 @@ Local mode does not use Cloud credentials or the Cloud web console. Start its lo
 ```bash
 bdxa local up                 # default 127.0.0.1:3333
 bdxa local up 3000            # custom port
-bdxa local token              # bearer token for the MCP client
-
 bdxa local -d --name backend
 bdxa local ls
 bdxa local restart --all
 bdxa local down
 ```
 
-Local MCP clients connect to `http://127.0.0.1:<port>/mcp` and must send `Authorization: Bearer <token>`. Rotate the token with `bdxa local token --rotate`; the previous token stops working immediately. The gateway binds only to loopback and validates Host/Origin in addition to bearer authentication. Local instances, policies, logs, audit data, and autostart profiles stay under `~/.buildifyx/local/`. Local management uses the same CLI/TUI implementation as Cloud; there is no Local web management UI.
+Local MCP clients connect to `http://127.0.0.1:<port>/mcp` with **No Auth**. The gateway binds only to `127.0.0.1`; when a remote MCP client needs access, expose that local port through your own HTTPS tunnel or reverse proxy and use the resulting `https://.../mcp` URL. Forwarded public `Host` values are accepted so tunnels work, while non-loopback browser `Origin` values are rejected. Local instances, policies, logs, audit data, and autostart profiles stay under `~/.buildifyx/local/`. Local management uses the same CLI/TUI implementation as Cloud; there is no Local web management UI.
 
 `bdxa local` and other Local instance commands require the Local gateway to be running. `bdxa local down` gracefully stops Local workspaces and the gateway. Background instance records/settings are preserved for `bdxa local start <name|id>`, while foreground run records are released so the same name can be started again later.
 
@@ -412,7 +410,6 @@ bdxa update
 bdxa update --restart
 
 bdxa local up
-bdxa local token
 bdxa local -d --name backend
 bdxa local ls
 bdxa local restart --all
@@ -423,7 +420,7 @@ bdxa --version
 ## Security notes
 
 - Buildifyx Cloud does not bypass the local permission system.
-- Local MCP binds only to loopback and requires the bearer token stored privately under `~/.buildifyx/local/auth.json`; rotate it with `bdxa local token --rotate`.
+- Local MCP uses **No Auth** and binds only to `127.0.0.1`. If you expose it through an HTTPS tunnel/reverse proxy, anyone who can reach that public MCP URL can attempt tool calls, so keep the tunnel private or temporary and rely on the Agent permission/approval policy for tool execution.
 - Device credentials are separate from login tokens.
 - Each running workspace process has a separate instance identity and workspace root.
 - Tool arguments received through Cloud or Local MCP are validated again by the local Agent before permission evaluation or execution.
