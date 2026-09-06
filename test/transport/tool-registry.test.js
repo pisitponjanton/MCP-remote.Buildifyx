@@ -29,6 +29,12 @@ test('local tool input validation applies defaults and rejects malformed cloud p
     cwd: '.',
     timeoutMs: 15_000
   });
+  assert.deepEqual(parseMcpToolInput('read_file', { path: 'README.md', startLine: 10, endLine: 30 }), {
+    path: 'README.md',
+    startLine: 10,
+    endLine: 30
+  });
+  assert.deepEqual(parseMcpToolInput('read_file', { path: 'README.md' }), { path: 'README.md' });
   assert.throws(
     () => parseMcpToolInput('run_command', { command: 'git', timeoutMs: 90_000 }),
     (error) => error?.code === 'INVALID_INPUT' && error?.details?.toolName === 'run_command'
@@ -39,6 +45,14 @@ test('local tool input validation applies defaults and rejects malformed cloud p
   );
   assert.throws(
     () => parseMcpToolInput('read_file', { path: 'x'.repeat(5000) }),
+    (error) => error?.code === 'INVALID_INPUT'
+  );
+  assert.throws(
+    () => parseMcpToolInput('read_file', { path: 'README.md', startLine: 0, endLine: 10 }),
+    (error) => error?.code === 'INVALID_INPUT'
+  );
+  assert.throws(
+    () => parseMcpToolInput('read_file', { path: 'README.md', startLine: 20, endLine: 10 }),
     (error) => error?.code === 'INVALID_INPUT'
   );
   assert.throws(

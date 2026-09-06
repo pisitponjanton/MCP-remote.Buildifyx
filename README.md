@@ -5,7 +5,7 @@ Buildifyx Desktop Agent (`bdxa`) exposes one or more user-controlled workspaces 
 Current package:
 
 ```text
-@buildifyx/desktop-agent@0.3.1
+@buildifyx/desktop-agent@0.3.2
 ```
 
 Default cloud:
@@ -345,6 +345,13 @@ write_file
 edit_file
 run_command
 ```
+
+For source code, Markdown, and other text, prefer the dedicated file tools instead of shell-based file transport:
+
+- `read_file` accepts optional 1-based `startLine` / `endLine` values so long files can be read in focused ranges without falling back to `sed`, `head`, `tail`, or `cat`. `endLine` values beyond EOF are clamped, and the response reports `startLine`, `endLine`, `returnedLineCount`, `truncated`, and `nextStartLine`.
+- `write_file` should be used to create text/source files instead of shell redirection or heredocs.
+- `edit_file` should be used for source/text modifications instead of `sed`, `perl`, or inline scripting patches when possible.
+- `run_command` is intended for commands such as tests, builds, Git, and package-manager operations. Large source/file contents should not be transported inside command arguments.
 
 The local agent executes the machine-facing tools only after the request passes its local permission policy.
 

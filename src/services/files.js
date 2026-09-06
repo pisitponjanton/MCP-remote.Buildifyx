@@ -8,6 +8,7 @@ import {
   readUtf8File,
   replaceCharacters,
   replaceLines,
+  sliceTextLines,
   writeUtf8FileAtomic
 } from '../utils/text.js';
 
@@ -60,13 +61,26 @@ export function createFileServices({ root }) {
       context.throwIfCancelled?.();
       const content = await readUtf8File(target);
       context.throwIfCancelled?.();
-      context.eventBus?.emit('resource.accessed', { requestId: context.requestId, resourceType: 'file', operation: 'read', path: target });
-      return {
+      const base = {
         path: displayPath(root, target),
         scope: context.pathInfo?.scope ?? 'root',
-        size: Buffer.byteLength(content, 'utf8'),
-        lineCount: countTextLines(content),
-        content
+        size: Buffer.byteLength(content, 'utf8')
+      };
+      context.eventBus?.emit('resource.accessed', { requestId: context.requestId, resourceType: 'file', operation: 'read', path: target });
+      if (input.startLine === undefined && input.endLine === undefined) {
+        return { ...base, lineCount: countTextLines(content), content };
+      }
+
+      const range = sliceTextLines(content, input.startLine ?? 1, input.endLine);
+      return {
+        ...base,
+        lineCount: range.lineCount,
+        startLine: range.startLine,
+        endLine: range.endLine,
+        returnedLineCount: range.returnedLineCount,
+        truncated: range.truncated,
+        nextStartLine: range.nextStartLine,
+        content: range.content
       };
     },
 

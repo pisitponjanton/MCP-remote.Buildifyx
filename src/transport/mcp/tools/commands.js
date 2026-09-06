@@ -15,8 +15,8 @@ export function getCommandToolDefinitions({ fullAccess = false } = {}) {
       name: 'run_command',
       title: 'Run command',
       description: fullAccess
-        ? `Run a command in FULL ACCESS mode. Commands are not sandboxed. Timeout: ${MAX_TIMEOUT_MS} ms; output: ${MAX_OUTPUT_BYTES} bytes per stream.`
-        : `Run a restricted developer command without a shell. cwd must stay inside an allowed root unless approved. Timeout: ${MAX_TIMEOUT_MS} ms; output: ${MAX_OUTPUT_BYTES} bytes per stream.`,
+        ? `Run a command in FULL ACCESS mode. Commands are not sandboxed. Use read_file/write_file/edit_file for source or text instead of passing large file contents in command arguments. Timeout: ${MAX_TIMEOUT_MS} ms; output: ${MAX_OUTPUT_BYTES} bytes per stream.`
+        : `Run a restricted developer command without a shell. Use read_file/write_file/edit_file for source or text instead of passing large file contents in command arguments. cwd must stay inside an allowed root unless approved. Timeout: ${MAX_TIMEOUT_MS} ms; output: ${MAX_OUTPUT_BYTES} bytes per stream.`,
       permission: 'command',
       inputSchema: RunCommandInput,
       annotations: {

@@ -63,9 +63,37 @@ export function countTextLines(content) {
 }
 
 function assertLineNumber(lines, line, label) {
-  if (line < 1 || line > lines.length) {
+  if (!Number.isInteger(line) || line < 1 || line > lines.length) {
     throw new Error(`${label} must be between 1 and ${lines.length}.`);
   }
+}
+
+export function sliceTextLines(content, startLine = 1, endLine = undefined) {
+  const lines = getLines(content);
+  const lineCount = lines.length;
+  const firstLine = startLine ?? 1;
+  const requestedEndLine = endLine ?? lineCount;
+
+  assertLineNumber(lines, firstLine, 'startLine');
+  if (!Number.isInteger(requestedEndLine) || requestedEndLine < 1) {
+    throw new Error('endLine must be a positive integer.');
+  }
+  if (requestedEndLine < firstLine) {
+    throw new Error('endLine must be greater than or equal to startLine.');
+  }
+
+  const lastLine = Math.min(requestedEndLine, lineCount);
+  const first = lines[firstLine - 1];
+  const last = lines[lastLine - 1];
+  return {
+    content: content.slice(first.start, last.end),
+    lineCount,
+    startLine: firstLine,
+    endLine: lastLine,
+    returnedLineCount: lastLine - firstLine + 1,
+    truncated: firstLine > 1 || lastLine < lineCount,
+    nextStartLine: lastLine < lineCount ? lastLine + 1 : null
+  };
 }
 
 export function replaceLines(content, startLine, endLine, replacementLines) {
