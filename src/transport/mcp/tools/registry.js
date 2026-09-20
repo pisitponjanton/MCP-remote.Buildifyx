@@ -4,6 +4,7 @@ import { AgentError, ErrorCode } from '../../../core/errors.js';
 import { getCommandToolDefinitions } from './commands.js';
 import { getFileToolDefinitions } from './files.js';
 import { getSystemToolDefinitions } from './system.js';
+import { getWorkspacePlanToolDefinitions } from './workspace-plan.js';
 import { errorResult, successResult } from '../response.js';
 
 const MANIFEST_VERSION = 1;
@@ -28,7 +29,8 @@ export function getMcpToolDefinitions(options = {}) {
   return [
     ...getSystemToolDefinitions(options),
     ...getFileToolDefinitions(options),
-    ...getCommandToolDefinitions(options)
+    ...getCommandToolDefinitions(options),
+    ...getWorkspacePlanToolDefinitions(options)
   ];
 }
 

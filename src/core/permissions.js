@@ -5,14 +5,18 @@ export const PermissionAction = Object.freeze({
   DENY: 'deny',
   CONFIRM: 'confirm'
 });
-
 export const ToolPermission = Object.freeze({
   get_system_info: 'read',
   list_directory: 'read',
   read_file: 'read',
   write_file: 'write',
   edit_file: 'write',
-  run_command: 'command'
+  run_command: 'command',
+  get_workspace_plan: 'read',
+  create_workspace_plan: 'write',
+  update_workspace_plan_intent: 'write',
+  complete_workspace_phase: 'write',
+  clear_workspace_plan: 'write'
 });
 
 export const DEFAULT_PERMISSION_POLICY = Object.freeze({

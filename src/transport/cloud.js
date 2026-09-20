@@ -261,7 +261,12 @@ export function createCloudAgent({
         mode: instance.mode,
         agentVersion: version,
         device: deviceInfo,
-        toolManifest: { count: manifest.count, hash: manifest.hash, manifestVersion: manifest.manifestVersion },
+        toolManifest: {
+          count: manifest.count,
+          hash: manifest.hash,
+          manifestVersion: manifest.manifestVersion,
+          ...(Array.isArray(manifest.tools) ? { names: manifest.tools.map((tool) => tool.name) } : {})
+        },
         ...(managementHandler ? {
           capabilities: {
             managementVersion: MANAGEMENT_PROTOCOL_VERSION,

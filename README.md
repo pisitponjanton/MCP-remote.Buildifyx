@@ -5,7 +5,7 @@ Buildifyx Desktop Agent (`bdxa`) exposes one or more user-controlled workspaces 
 Current package:
 
 ```text
-@buildifyx/desktop-agent@0.3.2
+@buildifyx/desktop-agent@0.3.3
 ```
 
 Default cloud:
@@ -344,6 +344,11 @@ read_file
 write_file
 edit_file
 run_command
+get_workspace_plan
+create_workspace_plan
+update_workspace_plan_intent
+complete_workspace_phase
+clear_workspace_plan
 ```
 
 For source code, Markdown, and other text, prefer the dedicated file tools instead of shell-based file transport:
@@ -352,6 +357,18 @@ For source code, Markdown, and other text, prefer the dedicated file tools inste
 - `write_file` should be used to create text/source files instead of shell redirection or heredocs.
 - `edit_file` should be used for source/text modifications instead of `sed`, `perl`, or inline scripting patches when possible.
 - `run_command` is intended for commands such as tests, builds, Git, and package-manager operations. Large source/file contents should not be transported inside command arguments.
+
+### Workspace Task Plans
+
+v0.3.3 adds a workspace-scoped task plan that lets an MCP client resume the same task across chats or MCP sessions without using the conversation as the source of truth.
+
+- `get_workspace_plan` reads the active task, authoritative intent, revision, and current phase.
+- `create_workspace_plan` creates the single active task for the workspace and automatically guarantees a final `review_diff` phase.
+- `update_workspace_plan_intent` explicitly changes task goal, scope, constraints, or acceptance criteria and advances the plan revision.
+- `complete_workspace_phase` advances normal phases, records review results, inserts/reuses `fix_review` after failed reviews, and deletes the plan after a successful final review.
+- `clear_workspace_plan` explicitly abandons the active task.
+
+The durable plan is stored outside the repository under `~/.buildifyx/workspace-state/<workspace-key>/plan.json`, keyed from the canonical workspace path. One workspace can have only one active task at a time. Mutations require `expectedRevision`, so a stale chat receives `PLAN_REVISION_CONFLICT` instead of silently overwriting newer progress. Completed plans are deleted rather than retained as history.
 
 The local agent executes the machine-facing tools only after the request passes its local permission policy.
 

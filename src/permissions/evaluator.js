@@ -6,7 +6,12 @@ const TOOL_CATEGORY = Object.freeze({
   read_file: 'read',
   write_file: 'write',
   edit_file: 'write',
-  run_command: 'command'
+  run_command: 'command',
+  get_workspace_plan: 'read',
+  create_workspace_plan: 'write',
+  update_workspace_plan_intent: 'write',
+  complete_workspace_phase: 'write',
+  clear_workspace_plan: 'write'
 });
 
 const FILE_TOOLS = new Set(['list_directory', 'read_file', 'write_file', 'edit_file']);
