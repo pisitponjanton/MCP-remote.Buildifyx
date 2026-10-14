@@ -4,7 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { createAuditLogger } from '../../audit/logger.js';
 import { createRuntime } from '../../core/runtime.js';
-import { normalizeError } from '../../core/errors.js';
+import { publicToolError } from '../../core/errors.js';
 import { createPolicyManager } from '../../permissions/manager.js';
 import { instancePolicyPath, loadInstancePolicy, resetInstancePolicy } from '../../permissions/store.js';
 import { localEnvironment } from '../../runtime/environment.js';
@@ -12,6 +12,8 @@ import { approvalForDashboard, hasInFlightTools, notifyHandoffActive, prepareHan
 import { startTui } from '../../tui/index.js';
 import { createLocalGatewayAgent } from '../../transport/local.js';
 import { createToolManifest, parseMcpToolInput } from '../../transport/mcp/tools/registry.js';
+import { createLocalMediaAgent } from '../../transport/media/local-agent.js';
+import { createMediaTransferPermission } from '../../transport/media/access-policy.js';
 import { inspectToolManifest } from '../../transport/mcp/manifest-store.js';
 import { getLocalGatewayStatus } from '../../local/gateway-control.js';
 import { startInstanceControl } from '../../utils/instance-control.js';
@@ -28,7 +30,7 @@ import {
 import { getPackageMetadata } from '../../version.js';
 import { getOption, hasFlag, resolveRoot } from '../options.js';
 
-const POLICY_CATEGORIES = new Set(['read', 'write', 'command', 'dangerous', 'outsideRoot']);
+const POLICY_CATEGORIES = new Set(['read', 'write', 'command', 'dangerous', 'outsideRoot', 'imageRead', 'imageSave', 'cacheManage', 'browserRead', 'browserNavigate', 'browserInteract', 'persistentProfile', 'browserCapture', 'browserDiagnostics', 'browserSensitive', 'browserExternal']);
 const POLICY_ACTIONS = new Set(['allow', 'ask', 'deny']);
 
 export async function runLocalInstance(args, { metadata: suppliedMetadata, updateStatus = null } = {}) {
@@ -77,7 +79,7 @@ export async function runLocalInstance(args, { metadata: suppliedMetadata, updat
   const policyFilePath = instancePolicyPath(instanceId, environment.rootDirectory);
   const policy = await loadInstancePolicy(instanceId, environment.rootDirectory);
   const policyManager = createPolicyManager(policy, { filePath: policyFilePath });
-  const runtime = createRuntime({ root, fullAccess: unrestrictedCommands, policyManager, interactive: useTui || mode === 'background' });
+  const runtime = createRuntime({ root, fullAccess: unrestrictedCommands, namespace: 'local', instanceId, principalId: 'local_os_user', policyManager, interactive: useTui || mode === 'background' });
   const audit = createAuditLogger({
     eventBus: runtime.eventBus,
     filePath: environment.auditPath,
@@ -90,6 +92,14 @@ export async function runLocalInstance(args, { metadata: suppliedMetadata, updat
   audit.start();
 
   const connection = createLocalGatewayAgent({ environment, eventBus: runtime.eventBus, instanceId });
+  const mediaAllowed = createMediaTransferPermission({
+    getCategories: () => policyManager.get().categories,
+    isCaptureArtifact: (artifactId) => runtime.services.__artifactRequiresCapture(artifactId)
+  });
+  const mediaAgent = createLocalMediaAgent({
+    readImage: (id) => runtime.services.__readImageBytes(id, { screenshotApproved: true }),
+    canTransfer: async (request) => !closing && await mediaAllowed(request)
+  });
   let closing = false;
   let handedOff = false;
   let control = null;
@@ -155,6 +165,7 @@ export async function runLocalInstance(args, { metadata: suppliedMetadata, updat
       if (typeof message.requestId !== 'string' || !message.requestId) throw new Error('Tool requestId is required.');
       return { cancelled: runtime.cancel(message.requestId, message.reason ?? 'Local MCP request was cancelled') };
     }
+    if (typeof message.command === 'string' && message.command.startsWith('media.')) return mediaAgent.command(message);
     if (message.command === 'tool.call') {
       if (typeof message.requestId !== 'string' || !message.requestId || typeof message.tool !== 'string' || !message.tool) {
         throw new Error('Invalid local MCP tool request.');
@@ -162,9 +173,10 @@ export async function runLocalInstance(args, { metadata: suppliedMetadata, updat
       try {
         const input = parseMcpToolInput(message.tool, message.arguments ?? {});
         const result = await runtime.dispatch(message.tool, input, { requestId: message.requestId });
+        mediaAgent.authorize({ requestId: message.requestId, secret: message.mediaSecret, tool: message.tool, result });
         return { result };
       } catch (error) {
-        const normalized = normalizeError(error);
+        const normalized = publicToolError(error);
         const forwarded = new Error(normalized.message);
         forwarded.code = normalized.code;
         forwarded.details = normalized.details;
@@ -177,6 +189,7 @@ export async function runLocalInstance(args, { metadata: suppliedMetadata, updat
   const shutdown = async ({ preserveInstance = false, finalStatus = 'stopped' } = {}) => {
     if (closing) return;
     closing = true;
+    mediaAgent.close();
     unsubscribeConnection();
     const runtimeStopping = runtime.stop?.('Agent is shutting down');
     await registryUpdate.catch(() => undefined);

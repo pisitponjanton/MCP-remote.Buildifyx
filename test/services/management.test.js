@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -30,6 +30,10 @@ test('remote management edits only the local instance policy through semantic ac
     assert.equal(MANAGEMENT_ACTIONS.includes('permission.set'), true);
     await handler('permission.set', { category: 'write', action: 'deny' });
     assert.equal(manager.get().categories.write, 'deny');
+    for (const category of ['imageRead', 'imageSave', 'cacheManage']) {
+      await handler('permission.set', { category, action: 'allow' });
+      assert.equal(manager.get().categories[category], 'allow');
+    }
 
     const extraRoot = path.join(directory, 'shared');
     await handler('root.add', { root: extraRoot });
@@ -92,4 +96,18 @@ test('remote management rejects protected/ambiguous roots, unknown actions, and 
     else process.env.BUILDFYX_HOME = previous;
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('permission.settled is a read-only barrier and cannot emit management.changed', async () => {
+  const directory=await mkdtemp(path.join(os.tmpdir(),'bdxa-settled-audit-'));
+  try {
+    const manager=createPolicyManager(undefined,{filePath:path.join(directory,'policy.json')});
+    const handler=createHandler(manager,directory);
+    const before=JSON.stringify(manager.get());
+    const result=await handler('permission.settled',{category:'browserSensitive'});
+    assert.equal(result.settled,true);
+    assert.equal(JSON.stringify(manager.get()),before);
+    const source=await readFile(new URL('../../src/cli/commands/cloud.js',import.meta.url),'utf8');
+    assert.match(source,/\['settings\.get', 'instance\.status', 'autostart\.get', 'permission\.settled'\]\.includes\(action\)/);
+  } finally { await rm(directory,{recursive:true,force:true}); }
 });

@@ -1,6 +1,10 @@
 import WebSocket from 'ws';
-import { normalizeError } from '../core/errors.js';
+import { randomUUID } from 'node:crypto';
+import { normalizeError, publicToolError } from '../core/errors.js';
 import { parseMcpToolInput } from './mcp/tools/registry.js';
+import { createCloudMediaBridge } from './media/cloud-bridge.js';
+import { createMediaTransferPermission } from './media/access-policy.js';
+import { createCloudImageImportReceiver } from './media/inbound.js';
 
 export const DEFAULT_CLOUD_ORIGIN = 'https://bdxa.buildifyx.com';
 export const AGENT_PROTOCOL_VERSION = 2;
@@ -85,12 +89,12 @@ export async function logoutDevice({ cloudUrl = DEFAULT_CLOUD_ORIGIN, deviceToke
 }
 
 function safeSend(socket, payload) {
-  if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
 }
 
 function safeSendAsync(socket, payload) {
   return new Promise((resolve, reject) => {
-    if (socket.readyState !== WebSocket.OPEN) {
+    if (socket?.readyState !== WebSocket.OPEN) {
       reject(new Error('Cloud socket is not open.'));
       return;
     }
@@ -114,7 +118,29 @@ export function createCloudAgent({
 }) {
   const endpoint = getCloudEndpoints(cloudUrl).agentUrl;
   let socket = null;
+  const socketGenerations = new WeakMap();
+  const mediaAllowed = createMediaTransferPermission({
+    getCategories: () => runtime.policyManager?.get()?.categories,
+    isCaptureArtifact: (artifactId) => runtime.services.__artifactRequiresCapture(artifactId)
+  });
+  const media = createCloudMediaBridge({ instanceId: instance.instanceId,
+    readImage: (id) => runtime.services.__readImageBytes(id, { screenshotApproved: true }),
+    canTransfer: (tool, result) => mediaAllowed({ tool, artifactId: result.artifactId }),
+    send: (message) => safeSendAsync(socket, message) });
+  const inbound=createCloudImageImportReceiver({
+    instanceId:instance.instanceId,
+    send:(message)=>safeSendAsync(socket,message),
+    storeImage:(bytes)=>runtime.services.__importCloudImage(bytes),
+    clearImages:()=>runtime.services?.__clearCloudImports?.(),
+    canImport:()=> {
+      const categories=runtime.policyManager?.get()?.categories ?? {};
+      return categories.imageRead==='allow' && categories.cacheManage==='allow';
+    },
+    current:(source)=>socket?.readyState===WebSocket.OPEN && (!source || source===socket)
+  });
   let stopped = false;
+  const activeMedia = new Map();
+  const activeCalls = new Set();
   let heartbeat = null;
   let retryTimer = null;
   let retryAttempt = 0;
@@ -139,10 +165,10 @@ export function createCloudAgent({
     }, delay);
   }
 
-  async function handleManagementCall(message) {
+  async function handleManagementCall(message, sourceSocket) {
     if (!message.requestId || typeof message.action !== 'string' || !message.action) return;
     if (message.instanceId && message.instanceId !== instance.instanceId) {
-      safeSend(socket, {
+      safeSend(sourceSocket, {
         type: 'management.error',
         requestId: message.requestId,
         instanceId: instance.instanceId,
@@ -151,7 +177,7 @@ export function createCloudAgent({
       return;
     }
     if (!managementHandler) {
-      safeSend(socket, {
+      safeSend(sourceSocket, {
         type: 'management.error',
         requestId: message.requestId,
         instanceId: instance.instanceId,
@@ -163,12 +189,16 @@ export function createCloudAgent({
     try {
       const handled = await managementHandler(message.action, message.arguments ?? {}, {
         requestId: message.requestId,
-        instanceId: instance.instanceId
+        instanceId: instance.instanceId,
+        // Captured socket identity is a generation fence. The handler checks
+        // this at the policy commit boundary, not merely when the RPC arrives.
+        assertCurrent: () => sourceSocket === socket && sourceSocket?.readyState === WebSocket.OPEN,
+        remoteGeneration: socketGenerations.get(sourceSocket)
       });
       const envelope = handled && typeof handled === 'object' && ('result' in handled || 'afterSend' in handled)
         ? handled
         : { result: handled };
-      await safeSendAsync(socket, {
+      await safeSendAsync(sourceSocket, {
         type: 'management.result',
         requestId: message.requestId,
         instanceId: instance.instanceId,
@@ -181,7 +211,7 @@ export function createCloudAgent({
       }
     } catch (error) {
       const normalized = normalizeError(error);
-      safeSend(socket, {
+      safeSend(sourceSocket, {
         type: 'management.error',
         requestId: message.requestId,
         instanceId: instance.instanceId,
@@ -190,29 +220,42 @@ export function createCloudAgent({
     }
   }
 
-  async function handleMessage(raw) {
+  async function handleMessage(raw, sourceSocket) {
+    // Ignore late frames from the previous authenticated connection.
+    if(sourceSocket !== socket || sourceSocket?.readyState !== WebSocket.OPEN) return;
     let message;
     try { message = JSON.parse(raw.toString()); } catch { return; }
 
-    if (message.type === 'ping') {
-      safeSend(socket, { type: 'pong', instanceId: instance.instanceId, timestamp: new Date().toISOString() });
+    if (message.type === 'media.capabilities.accept') {
+      const ok=media.acceptCapabilities(message);
+      inbound.accept(ok && message.features?.includes('image-import-v1'));
       return;
     }
-
+    if (inbound.receive(message,sourceSocket))return;
+    if (media.receive(message)) return;
+    if (message.type === 'ping') {
+      safeSend(sourceSocket, { type: 'pong', instanceId: instance.instanceId, timestamp: new Date().toISOString() });
+      return;
+    }
+    if (message.type === 'media.transfer.cancel' && message.instanceId === instance.instanceId && typeof message.requestId === 'string') {
+      activeMedia.get(message.requestId)?.abort();
+      return;
+    }
     if (message.type === 'tool.cancel' && message.requestId) {
+      activeMedia.get(message.requestId)?.abort();
       runtime.cancel?.(message.requestId, message.reason ?? 'Cloud request was cancelled');
       return;
     }
 
     if (message.type === 'management.call') {
-      await handleManagementCall(message);
+      await handleManagementCall(message, sourceSocket);
       return;
     }
 
     if (message.type !== 'tool.call' || !message.requestId || !message.tool) return;
 
     if (message.instanceId && message.instanceId !== instance.instanceId) {
-      safeSend(socket, {
+      safeSend(sourceSocket, {
         type: 'tool.error',
         requestId: message.requestId,
         instanceId: instance.instanceId,
@@ -221,19 +264,38 @@ export function createCloudAgent({
       return;
     }
 
+    // Request IDs are unique while in flight. A duplicate must never reach
+    // dispatch or own a finally handler for the original call: otherwise it
+    // can erase the first call's active entry and prevent disconnect cancel.
+    // Do not reply with tool.error using the same ID; the Cloud could attach
+    // that response to the original pending tool call. Fail closed instead.
+    if (activeCalls.has(message.requestId)) {
+      sourceSocket.close(1008, 'Duplicate tool request ID');
+      return;
+    }
     eventBus?.emit('cloud.tool.received', { requestId: message.requestId, tool: message.tool, instanceId: instance.instanceId });
+    activeCalls.add(message.requestId);
     try {
       const input = parseMcpToolInput(message.tool, message.arguments ?? {});
       const result = await runtime.dispatch(message.tool, input, { requestId: message.requestId });
-      safeSend(socket, { type: 'tool.result', requestId: message.requestId, instanceId: instance.instanceId, result });
+      const controller = new AbortController();
+      activeMedia.set(message.requestId, controller);
+      let transfer;
+      try { transfer = await media.sendImage(message.tool, result, message.requestId, controller.signal); }
+      finally { activeMedia.delete(message.requestId); }
+      const delivered = transfer ? { ...result, mediaTransfer: transfer, imageBytesDelivered: false,
+        message: 'Cloud relay acknowledged bytes; client ImageContent delivery requires Cloud implementation.' } : result;
+      safeSend(sourceSocket, { type: 'tool.result', requestId: message.requestId, instanceId: instance.instanceId, result: delivered });
     } catch (error) {
-      const normalized = normalizeError(error);
-      safeSend(socket, {
+      const normalized = publicToolError(error);
+      safeSend(sourceSocket, {
         type: 'tool.error',
         requestId: message.requestId,
         instanceId: instance.instanceId,
         error: { code: normalized.code, message: normalized.message, details: normalized.details }
       });
+    } finally {
+      activeCalls.delete(message.requestId);
     }
   }
 
@@ -249,7 +311,22 @@ export function createCloudAgent({
       }
     });
 
-    socket.on('open', () => {
+    const connectionSocket=socket;
+    connectionSocket.on('open', () => {
+      void (async () => {
+      if(socket!==connectionSocket)return;
+      const claim = runtime.policyManager?.claimRemoteGeneration;
+      if (typeof claim === 'function') {
+        const generation = randomUUID();
+        await claim(generation, () => {
+          if (socket !== connectionSocket || connectionSocket.readyState !== WebSocket.OPEN)
+            throw new Error('Remote management session replaced before generation claim.');
+        });
+        if (socket !== connectionSocket || connectionSocket.readyState !== WebSocket.OPEN) return;
+        socketGenerations.set(connectionSocket, generation);
+      }
+      media.reset();
+      inbound.reset();
       retryAttempt = 0;
       setState({ status: 'connected', retryAttempt: 0, retryInMs: null, connectedAt: new Date().toISOString() });
       safeSend(socket, {
@@ -267,12 +344,14 @@ export function createCloudAgent({
           manifestVersion: manifest.manifestVersion,
           ...(Array.isArray(manifest.tools) ? { names: manifest.tools.map((tool) => tool.name) } : {})
         },
-        ...(managementHandler ? {
-          capabilities: {
+        capabilities: {
+          ...(managementHandler ? {
             managementVersion: MANAGEMENT_PROTOCOL_VERSION,
-            actions: [...new Set(managementCapabilities)]
-          }
-        } : {})
+            actions: [...new Set(managementCapabilities)],
+            ...(socketGenerations.has(connectionSocket) ? { permissionFencing: 'policy-file-v1' } : {})
+          } : {}),
+          media: media.advertised
+        }
       });
       clearInterval(heartbeat);
       heartbeat = setInterval(() => safeSend(socket, {
@@ -283,11 +362,31 @@ export function createCloudAgent({
         timestamp: new Date().toISOString()
       }), heartbeatMs);
       heartbeat.unref?.();
+      })().catch((error) => {
+        if (socket !== connectionSocket) return;
+        setState({ lastError: error?.message ?? String(error) });
+        connectionSocket.close(1011, 'Remote permission generation unavailable');
+      });
     });
 
-    socket.on('message', (raw) => { void handleMessage(raw); });
-    socket.on('error', (error) => setState({ lastError: error.message }));
-    socket.on('close', (code, reason) => {
+    connectionSocket.on('message', (raw) => { void handleMessage(raw, connectionSocket); });
+    connectionSocket.on('error', (error) => {
+      if(socket===connectionSocket)setState({ lastError: error.message });
+    });
+    connectionSocket.on('close', (code, reason) => {
+      if(socket!==connectionSocket)return;
+      // Cancel tools still awaiting approval or browser launch, not just media
+      // transfers. This fences browser sessions from appearing after disconnect.
+      for (const requestId of activeCalls) runtime.cancel?.(requestId, 'Cloud connection closed');
+      for (const controller of activeMedia.values()) controller.abort();
+      activeMedia.clear();
+      media.stop();
+      inbound.reset();
+      // Cloud sessions must not retain a remotely controlled browser after the
+      // authenticated socket goes away. Persistent profile files remain local.
+      void runtime.services?.closeActive?.().catch(error => {
+        eventBus?.emit('cloud.browser.cleanup.failed', { instanceId: instance.instanceId, code: error?.code ?? 'BROWSER_CLEANUP_FAILED' });
+      });
       clearInterval(heartbeat);
       heartbeat = null;
       socket = null;
@@ -304,6 +403,10 @@ export function createCloudAgent({
 
   async function stop() {
     stopped = true;
+    for (const controller of activeMedia.values()) controller.abort();
+    activeMedia.clear();
+    media.stop();
+    inbound.stop();
     clearInterval(heartbeat);
     clearTimeout(retryTimer);
     heartbeat = null;

@@ -1,0 +1,84 @@
+name: bdxa v0.4.0 native release qualification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/v040-release-matrix.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-tarball-smoke:
+    # Explicitly qualify installed package binaries on each host; no deployment or publishing.
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14]
+        node: ['20.9.0', '24.20.0']
+    env:
+      BUILDFYX_SKIP_UPDATE_CHECK: '1'
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/bdxa-v040-chromium
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install locked dependencies (do not install browser implicitly)
+        shell: bash
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Source syntax and publish manifest
+        shell: bash
+        run: |
+          npm run check
+          npm run pack:check
+      - name: Fresh isolated v0.4.0 tarball installation
+        # Use native runner paths, including Windows drive-letter RUNNER_TEMP.
+        shell: pwsh
+        run: |
+          $tarball = Join-Path $env:RUNNER_TEMP 'buildifyx-desktop-agent-0.4.0.tgz'
+          $installed = Join-Path $env:RUNNER_TEMP 'bdxa-v040-installed'
+          npm pack --ignore-scripts --pack-destination $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { throw 'npm pack failed' }
+          npm install --prefix $installed --ignore-scripts --no-audit --no-fund $tarball
+          if ($LASTEXITCODE -ne 0) { throw 'npm tarball install failed' }
+      - name: Linux Chromium OS dependencies (CI host only)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          node "$RUNNER_TEMP/bdxa-v040-installed/node_modules/playwright/cli.js" install-deps chromium
+      - name: Explicitly install matching Chromium (isolated CI path)
+        shell: pwsh
+        run: |
+          $installed = Join-Path $env:RUNNER_TEMP 'bdxa-v040-installed'
+          $agentCli = Join-Path $installed 'node_modules/@buildifyx/desktop-agent/src/cli.js'
+          node $agentCli browser install
+      - name: Execute installed-package image and real browser smoke
+        shell: pwsh
+        run: |
+          $installed = Join-Path $env:RUNNER_TEMP 'bdxa-v040-installed'
+          node scripts/release-validate-tarball.js $installed
+          if ($LASTEXITCODE -ne 0) { throw 'Installed image/cache smoke failed' }
+          node scripts/release-validate-browser-tarball.js $installed
+      - name: Full cross-platform source regression suite
+        shell: bash
+        run: npm test
+      - name: Historical signed-in fixture upgrade (mock credentials only)
+        shell: pwsh
+        run: |
+          # The validator requires an isolated child, not RUNNER_TEMP itself.
+          $upgrades = Join-Path $env:RUNNER_TEMP 'bdxa-v040-upgrades'
+          $tarball = Join-Path $env:RUNNER_TEMP 'buildifyx-desktop-agent-0.4.0.tgz'
+          New-Item -ItemType Directory -Force -Path $upgrades | Out-Null
+          Copy-Item -LiteralPath $tarball -Destination (Join-Path $upgrades 'buildifyx-desktop-agent-0.4.0.tgz')
+          node scripts/release-validate-installed.js $upgrades

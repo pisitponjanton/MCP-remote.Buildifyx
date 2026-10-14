@@ -1,6 +1,6 @@
 {
   "name": "@buildifyx/desktop-agent",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Buildifyx desktop agent for securely running MCP tools through Buildifyx Cloud or a loopback-only Local MCP gateway.",
   "type": "module",
   "bin": {
@@ -11,14 +11,18 @@
     "start": "node ./src/cli.js",
     "doctor": "node ./src/cli.js doctor",
     "check": "node ./scripts/check.js",
-    "test": "node --test",
-    "prepublishOnly": "npm run check && npm test"
+    "test": "node ./scripts/run-tests.js",
+    "browser:check": "node ./src/cli.js browser check",
+    "browser:install": "node ./src/cli.js browser install",
+    "pack:check": "node ./scripts/verify-package.js",
+    "prepublishOnly": "npm run check && npm test && npm run pack:check"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.9.0"
   },
   "files": [
     "src",
+    "docs",
     "README.md",
     "LICENSE"
   ],
@@ -37,7 +41,9 @@
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "ink": "^6.8.0",
+    "playwright": "1.56.1",
     "react": "^19.2.8",
+    "sharp": "^0.35.5",
     "ws": "^8.21.3",
     "zod": "4.5.4"
   },

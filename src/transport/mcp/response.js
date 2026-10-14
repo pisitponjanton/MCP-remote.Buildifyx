@@ -1,4 +1,4 @@
-import { normalizeError } from '../../core/errors.js';
+import { publicToolError } from '../../core/errors.js';
 
 export function successResult(structuredContent, { isError } = {}) {
   return {
@@ -9,7 +9,7 @@ export function successResult(structuredContent, { isError } = {}) {
 }
 
 export function errorResult(error) {
-  const normalized = normalizeError(error);
+  const normalized = publicToolError(error);
   const structuredContent = {
     error: {
       code: normalized.code,

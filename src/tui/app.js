@@ -1,19 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
-import { detectProfile, PROFILES } from './profiles.js';
+import { applyProfile, detectProfile, PROFILES } from './profiles.js';
 import { groupActivities, shortTime, statusColor, statusGlyph } from './model.js';
 import { useTuiLayout } from './layout.js';
+import { PERMISSION_CATEGORIES, effectivePermission, extraPermissionSummary, permissionViewport } from './permission-view.js';
+import { activeApproval, approvalChoices, approvalImpact, approvalVisibleRows,
+  defaultApprovalSelection, safeApprovalText, visibleTuiScreen } from './approval-view.js';
 
 const h = React.createElement;
 const ACTIONS = ['allow', 'ask', 'deny'];
-const CATEGORIES = ['read', 'write', 'command', 'dangerous', 'outsideRoot'];
-const CATEGORY_LABELS = Object.freeze({
-  read: 'Read files',
-  write: 'Write files',
-  command: 'Run commands',
-  dangerous: 'Dangerous commands',
-  outsideRoot: 'Outside workspace'
-});
 
 function cycleAction(current, direction) {
   const index = ACTIONS.indexOf(current);
@@ -22,25 +17,6 @@ function cycleAction(current, direction) {
 
 function title(text) {
   return h(Text, { bold: true }, text);
-}
-
-function approvalChoices(request) {
-  const choices = [{ label: 'Allow once', action: 'allow', remember: null }];
-  if (request.category === 'outsideRoot' && request.pathInfo?.scope === 'outside') {
-    choices.push({ label: 'Always allow this location', action: 'allow', remember: 'root' });
-  } else if (request.toolName === 'run_command') {
-    choices.push({ label: 'Always allow this command', action: 'allow', remember: 'command' });
-  }
-  choices.push({ label: 'Deny', action: 'deny', remember: null });
-  return choices;
-}
-
-function approvalImpact(request) {
-  if (request.category === 'dangerous') return 'This action is classified as dangerous and may make significant changes.';
-  if (request.pathInfo?.scope === 'outside') return 'This action needs access outside the current workspace.';
-  if (request.category === 'write') return 'This action can modify files.';
-  if (request.category === 'command') return 'This action will run a command on this computer.';
-  return request.evaluation?.reason ?? request.category;
 }
 
 function Header({ version, root, instanceName, instanceId, mode, profile, pendingCount, connectionStatus, updateStatus }) {
@@ -126,47 +102,49 @@ function RequestDetails({ item, compact, maxRows = Number.POSITIVE_INFINITY }) {
   return h(Box, { flexDirection: 'column' }, ...visible);
 }
 
-function ApprovalPanel({ request, selected, attached = false, compact = false }) {
+function ApprovalPanel({ request, pendingCount, selected, attached = false, compact = false, layout }) {
   const choices = approvalChoices(request);
-  const choiceLines = choices.map((choice, index) => h(Text, { key: choice.label, bold: selected === index, wrap: 'truncate-end' }, `${selected === index ? '›' : ' '} ${choice.label}`));
-  if (compact) {
-    return h(Box, { flexDirection: 'column' },
-      h(Text, { bold: true }, 'APPROVAL REQUIRED'),
-      h(Text, { bold: true, wrap: 'truncate-end' }, request.description),
-      request.pathInfo ? h(Text, { wrap: 'truncate-end' }, `Location  ${request.pathInfo.resolved}`) : null,
-      h(Text, { dimColor: true, wrap: 'truncate-end' }, approvalImpact(request)),
-      ...choiceLines,
-      h(Text, { dimColor: true, wrap: 'truncate-end' }, `↑↓ Select  Enter Confirm  Q Deny  Ctrl+C ${attached ? 'Detach' : 'Stop'}`)
-    );
-  }
-  return h(Box, { flexDirection: 'column' },
-    h(Text, { bold: true }, 'APPROVAL REQUIRED'),
-    h(Text, null, ''),
-    h(Text, { bold: true, wrap: 'wrap' }, request.description),
-    request.pathInfo ? h(Text, { wrap: 'truncate-end' }, `Location  ${request.pathInfo.resolved}`) : null,
-    h(Text, { dimColor: true, wrap: 'wrap' }, approvalImpact(request)),
-    h(Text, null, ''),
+  const choiceLines = choices.map((choice, index) => h(Text, {
+    key: choice.label, bold: selected === index,
+    color: choice.action === 'deny' ? 'yellow' : undefined,
+    wrap: 'truncate-end'
+  }, `${selected === index ? '›' : ' '} ${choice.label}`));
+  const exitLabel = attached ? 'Detach' : 'Stop';
+  return h(Box, { width: '100%', height: layout.availableRows,
+    borderStyle: 'classic', paddingX: 1, flexDirection: 'column' },
+    h(Text, { color: 'yellow', bold: true, wrap: 'truncate-end' },
+      `APPROVAL REQUIRED · 1 of ${pendingCount}`),
+    h(Text, { bold: true, wrap: 'truncate-end' },
+      `${safeApprovalText(request.toolName ?? 'Tool', 80)} · ${safeApprovalText(request.category ?? 'permission', 50)}`),
+    h(Text, { wrap: 'truncate-end' }, safeApprovalText(request.description ?? 'A tool needs permission.')),
+    !compact && request.pathInfo?.resolved
+      ? h(Text, { wrap: 'truncate-end' }, `Location  ${safeApprovalText(request.pathInfo.resolved)}`) : null,
+    !compact ? h(Text, { dimColor: true, wrap: 'truncate-end' }, safeApprovalText(approvalImpact(request))) : null,
     ...choiceLines,
-    h(Text, null, ''),
-    h(Text, { dimColor: true }, `↑↓ Select   Enter Confirm   Q Back/Deny   Ctrl+C ${attached ? 'Detach' : 'Stop'}`)
+    h(Text, { dimColor: true, wrap: 'truncate-end' },
+      `↑↓ Select  Enter Confirm  Q Deny  Ctrl+C ${exitLabel}`),
+    !compact ? h(Text, { dimColor: true, wrap: 'truncate-end' },
+      'No automatic permission changes. Previous screen resumes when requests finish.') : null
   );
 }
 
-function StatusPanel({ selectedItem, request, approvalSelected, layout, attached = false }) {
+function StatusPanel({ selectedItem, layout }) {
   const detailRows = Math.max(1, layout.panelHeight - 3);
   return h(Box, { width: layout.statusWidth, borderStyle: 'classic', paddingX: 1, flexDirection: 'column', height: layout.panelHeight },
-    request
-      ? h(ApprovalPanel, { request, selected: approvalSelected, attached, compact: layout.compact })
-      : h(React.Fragment, null, title('DETAILS'), h(RequestDetails, { item: selectedItem, compact: layout.compact, maxRows: detailRows }))
+    title('DETAILS'), h(RequestDetails, { item: selectedItem, compact: layout.compact, maxRows: detailRows })
   );
 }
 
-function Controls({ screen, inputMode, compact, attached = false, canBackground = false, backgroundConfirm = false }) {
+function Controls({ screen, inputMode, compact, attached = false, canBackground = false, backgroundConfirm = false, approvalActive = false }) {
   const exitLabel = attached ? 'Ctrl+C Detach' : 'Ctrl+C Stop';
   let lines;
-  if (backgroundConfirm) lines = ['Enter Confirm background   Q Back   Ctrl+C Stop'];
+  if (approvalActive) lines = [`↑↓ Approval choice   Enter Confirm   Q Deny   ${exitLabel}`];
+  else if (backgroundConfirm) lines = ['Enter Confirm background   Q Back   Ctrl+C Stop'];
   else if (inputMode) lines = [`Enter Save   Q on empty input Back   ${exitLabel}`];
-  else if (screen === 'permissions') lines = ['↑↓ Select   ←→ Change   A Auto   O Read-only   F Allow-all', `R Roots   C Command rules   Q Back   ${exitLabel}`];
+  else if (screen === 'permissions') lines = [
+    '↑↓ Move  ←→ Change  Space Cycle  A/O/F Base presets',
+    `R Roots  C Rules  Q Back  ${exitLabel}`
+  ];
   else if (screen === 'roots') lines = [`↑↓ Select   A Add root   D Delete root   Q Back   ${exitLabel}`];
   else if (screen === 'commands') lines = [`↑↓ Select   ←→ Change   A Add rule   D Delete rule   Q Back   ${exitLabel}`];
   else if (screen === 'tools') lines = [`Q Back   ${exitLabel}`];
@@ -182,19 +160,28 @@ function Controls({ screen, inputMode, compact, attached = false, canBackground 
   );
 }
 
-function PermissionsScreen({ policy, selected }) {
-  return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column', flexGrow: 1 },
-    title('PERMISSIONS'),
-    h(Text, { dimColor: true }, 'Choose what ChatGPT can do automatically. ASK requires local approval.'),
-    h(Text, null, ''),
-    ...CATEGORIES.map((category, index) => h(Box, { key: category },
-      h(Text, { bold: index === selected }, `${index === selected ? '›' : ' '} ${CATEGORY_LABELS[category].padEnd(20)}`),
-      h(Text, { bold: index === selected }, `[ ${String(policy.categories[category]).toUpperCase().padEnd(5)} ]`)
-    )),
-    h(Text, null, ''),
-    h(Text, { dimColor: true }, `Current profile: ${PROFILES[detectProfile(policy)].label}`),
-    h(Text, { dimColor: true }, 'Presets: A Auto · O Read-only · F Allow all'),
-    h(Text, { dimColor: true }, `Additional roots: ${policy.additionalRoots.length} · Custom command rules: ${policy.commandRules.length}`)
+function PermissionsScreen({ policy, selected, layout }) {
+  // Reserve the two Ink borders plus six fixed text rows. The policy list
+  // scrolls by category while keeping its three group headings visible when
+  // they fall within the viewport; even narrow terminals cannot overflow.
+  const viewport = permissionViewport(selected, Math.max(1, layout.availableRows - 8));
+  const extras = extraPermissionSummary(policy);
+  const labelWidth = Math.max(12, Math.min(27, layout.columns - 19));
+  return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column', height: layout.availableRows },
+    title('PERMISSIONS (16 categories)'),
+    h(Text, { dimColor: true, wrap: 'truncate-end' }, '↑↓ Select  ←→/Space change decision  ASK needs approval'),
+    ...viewport.rows.map(row => row.type === 'group'
+      ? h(Text, { key: `group-${row.label}`, bold: true, color: 'cyan', wrap: 'truncate-end' }, `— ${row.label} —`)
+      : h(Text, { key: row.key, bold: PERMISSION_CATEGORIES[viewport.selected] === row.key, wrap: 'truncate-end' },
+        `${PERMISSION_CATEGORIES[viewport.selected] === row.key ? '›' : ' '} ${row.label.padEnd(labelWidth)} [ ${effectivePermission(policy, row.key).toUpperCase().padEnd(5)} ]`)
+    ),
+    h(Text, { dimColor: true, wrap: 'truncate-end' },
+      `${viewport.group} · ${viewport.selected + 1}/16 ${viewport.above ? '↑' : ''}${viewport.below ? '↓' : ''}`),
+    h(Text, { dimColor: true, wrap: 'truncate-end' }, `Base 5 preset: ${PROFILES[detectProfile(policy)].label}`),
+    h(Text, { dimColor: true, wrap: 'truncate-end' },
+      `Extra 11 independent: ${extras.allow} Allow · ${extras.ask} Ask · ${extras.deny} Deny`),
+    h(Text, { dimColor: true, wrap: 'truncate-end' },
+      `A/O/F change base 5 only. Roots: ${policy.additionalRoots.length} · Rules: ${policy.commandRules.length}`)
   );
 }
 
@@ -264,7 +251,7 @@ function HelpScreen({ attached = false, canBackground = false }) {
     title('HELP'),
     h(Text, { bold: true }, 'Main'),
     h(Text, null, '  ↑↓       Select recent activity'),
-    h(Text, null, '  P        Permissions'),
+    h(Text, null, '  P        Permissions (16 categories)'),
     h(Text, null, '  ? / H    Help'),
     canBackground ? h(Text, null, '  D        Run this instance in background') : null,
     h(Text, null, '  Q        Back'),
@@ -274,20 +261,18 @@ function HelpScreen({ attached = false, canBackground = false }) {
     h(Text, null, '  R        Allowed roots'),
     h(Text, null, '  C        Command rules'),
     h(Text, null, '  T        Diagnostics and MCP tools'),
+    h(Text, null, '  Permissions: ↑↓ select; ←→ / Space change Allow, Ask, Deny'),
+    h(Text, null, '  A/O/F presets change only the 5 base categories, not Image/Cache/Browser'),
     h(Text, null, ''),
     h(Text, { bold: true }, 'Approvals'),
     h(Text, null, '  ↑↓       Select decision'),
     h(Text, null, '  Enter    Confirm'),
-    h(Text, null, '  Q        Back / deny request'),
+    h(Text, null, '  Q        Deny the pending request (from any screen)'),
+    h(Text, null, '  Pending approvals interrupt any screen and default to Deny'),
+    h(Text, null, '  Other screens return after approvals are resolved / cancelled'),
     h(Text, null, `  Ctrl+C   ${exitLabel}`)
   );
 }
-async function applyProfile(policyManager, profileKey) {
-  const profile = PROFILES[profileKey];
-  if (!profile?.categories) return;
-  for (const [category, action] of Object.entries(profile.categories)) await policyManager.setCategory(category, action);
-}
-
 export function App({ eventBus, approvalQueue, policyManager, version, updateStatus, root, instanceId, instanceName, mode, auditPath, toolManifest, toolManifestState, toolsUrl, onQuit, onBackground, attached = false }) {
   const { exit } = useApp();
   const layout = useTuiLayout({ hasUpdate: Boolean(updateStatus?.updateAvailable || updateStatus?.restartRequired) });
@@ -302,7 +287,10 @@ export function App({ eventBus, approvalQueue, policyManager, version, updateSta
   const [permissionSelected, setPermissionSelected] = useState(0);
   const [rootSelected, setRootSelected] = useState(0);
   const [commandSelected, setCommandSelected] = useState(0);
-  const [approvalSelected, setApprovalSelected] = useState(0);
+  const initialApproval = activeApproval(approvalQueue.getPending());
+  const [approvalSelected, setApprovalSelected] = useState(() => defaultApprovalSelection(initialApproval));
+  const [approvalFocusId, setApprovalFocusId] = useState(initialApproval?.id ?? null);
+  const approvalResolving = useRef(null);
   const [inputMode, setInputMode] = useState(null);
   const [buffer, setBuffer] = useState('');
   const [backgroundConfirm, setBackgroundConfirm] = useState(false);
@@ -315,6 +303,8 @@ export function App({ eventBus, approvalQueue, policyManager, version, updateSta
 
   useEffect(() => eventBus.subscribe((event) => {
     setEvents(eventBus.getHistory());
+    if (event.type === 'permission.requested') { setMessage('Local approval required. Review before allowing.'); return; }
+    if (event.type === 'permission.cancelled') { setMessage('Pending approval cancelled or expired.'); return; }
     if (event.type === 'tool.started') { setMessage(`Running tool: ${event.tool}`); return; }
     if (event.type === 'tool.completed') { setMessage(`Completed tool: ${event.tool} · ${event.durationMs} ms`); return; }
     if (event.type === 'tool.failed') { setMessage(`Failed tool: ${event.tool} · ${event.error?.code ?? 'ERROR'}`); return; }
@@ -333,15 +323,26 @@ export function App({ eventBus, approvalQueue, policyManager, version, updateSta
     else if (event.status === 'disconnected') setMessage('Disconnected from Buildifyx Cloud.');
     else if (event.status === 'connecting') setMessage('Connecting to Buildifyx Cloud...');
   }), [eventBus]);
-  useEffect(() => approvalQueue.subscribe((next) => { setPending(next); if (next.length) setApprovalSelected(0); }), [approvalQueue]);
+  useEffect(() => approvalQueue.subscribe((next) => { setPending(next); }), [approvalQueue]);
   useEffect(() => policyManager.subscribe((next) => setPolicy({ ...next, categories: { ...next.categories } })), [policyManager]);
 
   const activities = useMemo(() => groupActivities(events), [events]);
   const previousActivityCount = useRef(null);
   const profile = detectProfile(policy);
-  const request = pending[0] ?? null;
-  const approvalNeedsResize = Boolean(request && layout.panelHeight < 10);
+  const request = activeApproval(pending);
+  const approvalLayout = approvalVisibleRows(layout.availableRows);
+  const approvalNeedsResize = Boolean(request && !approvalLayout.canRespond);
   const interactionBlocked = layout.tooSmall || approvalNeedsResize;
+  const approvalSelection = request && approvalFocusId === request.id
+    ? approvalSelected : defaultApprovalSelection(request);
+
+  // A second/concurrent request must never reuse the previous request's
+  // selected "Allow once" choice. Cancelled/expired approvals vanish from
+  // the overlay without mutating the page or input buffer underneath it.
+  useEffect(() => {
+    setApprovalFocusId(request?.id ?? null);
+    setApprovalSelected(defaultApprovalSelection(request));
+  }, [request?.id]);
   const selectedIndex = activities.length ? Math.min(activitySelected, activities.length - 1) : -1;
   const selectedItem = selectedIndex >= 0 ? activities[selectedIndex] : null;
 
@@ -365,22 +366,42 @@ export function App({ eventBus, approvalQueue, policyManager, version, updateSta
     exit();
   }
 
+  async function resolveVisibleApproval(decision) {
+    if (!request || approvalResolving.current) return;
+    const id = request.id;
+    approvalResolving.current = id;
+    try {
+      const resolved = await approvalQueue.resolve(id, decision);
+      if (resolved === false) {
+        setMessage('Approval expired or cancelled. No action was authorized.');
+      } else {
+        setMessage(decision.action === 'deny' ? 'Request denied.'
+          : decision.remember ? 'Permission rule updated for this request.'
+            : 'Request allowed once.');
+      }
+    } catch {
+      // Attached control can be disconnected or the request may have timed
+      // out. Never report success until the remote owner acknowledges it.
+      setMessage('Approval could not be confirmed. No success was reported.');
+    } finally {
+      if (approvalResolving.current === id) approvalResolving.current = null;
+    }
+  }
+
   useInput(async (input, key) => {
     if (key.ctrl && input.toLowerCase() === 'c') { await quit(); return; }
     if (interactionBlocked) return;
     if (request) {
       const choices = approvalChoices(request);
-      if (input === 'q' || input === 'Q') {
-        approvalQueue.resolve(request.id, { action: 'deny', remember: null });
-        setMessage('Request denied.');
+      if (input === 'q' || input === 'Q' || key.escape) {
+        await resolveVisibleApproval({ action: 'deny', remember: null });
       } else if (key.upArrow) {
         setApprovalSelected((value) => Math.max(0, value - 1));
       } else if (key.downArrow) {
         setApprovalSelected((value) => Math.min(choices.length - 1, value + 1));
       } else if (key.return) {
-        const choice = choices[Math.min(approvalSelected, choices.length - 1)];
-        approvalQueue.resolve(request.id, { action: choice.action, remember: choice.remember });
-        setMessage(choice.action === 'deny' ? 'Request denied.' : choice.remember ? `${choice.label}.` : 'Request allowed once.');
+        const choice = choices[Math.max(0, Math.min(approvalSelection, choices.length - 1))];
+        await resolveVisibleApproval({ action: choice.action, remember: choice.remember });
       }
       return;
     }
@@ -452,13 +473,13 @@ export function App({ eventBus, approvalQueue, policyManager, version, updateSta
 
     if (screen === 'permissions') {
       if (key.upArrow) setPermissionSelected((value) => Math.max(0, value - 1));
-      else if (key.downArrow) setPermissionSelected((value) => Math.min(CATEGORIES.length - 1, value + 1));
+      else if (key.downArrow) setPermissionSelected((value) => Math.min(PERMISSION_CATEGORIES.length - 1, value + 1));
       else if (key.leftArrow) {
-        const category = CATEGORIES[permissionSelected];
-        await policyManager.setCategory(category, cycleAction(policy.categories[category], -1));
+        const category = PERMISSION_CATEGORIES[permissionSelected];
+        await policyManager.setCategory(category, cycleAction(effectivePermission(policy, category), -1));
       } else if (key.rightArrow || input === ' ') {
-        const category = CATEGORIES[permissionSelected];
-        await policyManager.setCategory(category, cycleAction(policy.categories[category], 1));
+        const category = PERMISSION_CATEGORIES[permissionSelected];
+        await policyManager.setCategory(category, cycleAction(effectivePermission(policy, category), 1));
       } else if (input === 'a' || input === 'A') await applyProfile(policyManager, 'auto');
       else if (input === 'o' || input === 'O') await applyProfile(policyManager, 'readOnly');
       else if (input === 'f' || input === 'F') await applyProfile(policyManager, 'fullAccess');
@@ -518,21 +539,24 @@ export function App({ eventBus, approvalQueue, policyManager, version, updateSta
     );
   }
   let main;
-  if (backgroundConfirm) main = h(BackgroundConfirmScreen, { instanceName, root });
-  else if (screen === 'permissions') main = h(PermissionsScreen, { policy, selected: permissionSelected });
-  else if (screen === 'roots') main = h(RootsScreen, { root, roots: policy.additionalRoots, selected: rootSelected, inputMode, buffer });
-  else if (screen === 'commands') main = h(CommandsScreen, { rules: policy.commandRules, selected: commandSelected, inputMode, buffer });
-  else if (screen === 'tools') main = h(ToolsScreen, { manifest: toolManifest, manifestState: toolManifestState, toolsUrl, auditPath });
-  else if (screen === 'help') main = h(HelpScreen, { attached, canBackground });
+  const visibleScreen = visibleTuiScreen(screen, request, backgroundConfirm);
+  if (visibleScreen === 'approval') main = h(ApprovalPanel, { request, pendingCount: pending.length,
+    selected: approvalSelection, attached, compact: approvalLayout.compact, layout });
+  else if (visibleScreen === 'background-confirm') main = h(BackgroundConfirmScreen, { instanceName, root });
+  else if (visibleScreen === 'permissions') main = h(PermissionsScreen, { policy, selected: permissionSelected, layout });
+  else if (visibleScreen === 'roots') main = h(RootsScreen, { root, roots: policy.additionalRoots, selected: rootSelected, inputMode, buffer });
+  else if (visibleScreen === 'commands') main = h(CommandsScreen, { rules: policy.commandRules, selected: commandSelected, inputMode, buffer });
+  else if (visibleScreen === 'tools') main = h(ToolsScreen, { manifest: toolManifest, manifestState: toolManifestState, toolsUrl, auditPath });
+  else if (visibleScreen === 'help') main = h(HelpScreen, { attached, canBackground });
   else main = h(Box, { flexDirection: layout.narrow ? 'column' : 'row' },
     h(ActivityPanel, { activities, selected: selectedIndex, layout }),
-    h(StatusPanel, { selectedItem, request, approvalSelected, layout, attached })
+    h(StatusPanel, { selectedItem, layout })
   );
 
   return h(Box, { flexDirection: 'column', width: '100%', height: layout.canvasRows },
     h(Header, { version, updateStatus, root, instanceId, instanceName, mode, profile, pendingCount: pending.length, connectionStatus }),
     main,
-    h(Controls, { screen, inputMode, compact: layout.compact, attached, canBackground, backgroundConfirm }),
+    h(Controls, { screen, inputMode, compact: layout.compact, attached, canBackground, backgroundConfirm, approvalActive: Boolean(request) }),
     h(Text, { color: message.startsWith('MCP tools changed') ? 'yellow' : 'cyan', wrap: 'truncate-end' }, message)
   );
 }

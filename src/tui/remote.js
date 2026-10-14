@@ -122,14 +122,22 @@ export function createRemoteDashboardState(instance, initialDashboard, { request
       approvalListeners.add(listener);
       return () => approvalListeners.delete(listener);
     },
-    resolve(approvalId, decision) {
-      void rpc('approval.resolve', {
-        approvalId,
-        requestId: approvalId,
-        action: decision.action,
-        remember: decision.remember ?? null
-      }).then(() => refresh()).catch(() => refresh());
-      return true;
+    async resolve(approvalId, decision) {
+      // Do not claim that an attached approval succeeded until the owning
+      // Agent acknowledges it. The request may have timed out, been cancelled
+      // or the local instance control socket may be disconnected.
+      try {
+        const response = await rpc('approval.resolve', {
+          approvalId,
+          requestId: approvalId,
+          action: decision.action,
+          remember: decision.remember ?? null
+        });
+        if (response.resolved !== true) throw new Error('Approval was not confirmed.');
+        return true;
+      } finally {
+        await refresh();
+      }
     }
   };
 

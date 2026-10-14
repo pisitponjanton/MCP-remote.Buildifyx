@@ -1,6 +1,8 @@
 import { rm as removeFile } from 'node:fs/promises';
 import os from 'node:os';
+import { resolveCloudBrowserIdentity } from '../../browser/identity.js';
 import process from 'node:process';
+import { resolveCloudCachePrincipal } from '../../cache/principal.js';
 import { createAuditLogger } from '../../audit/logger.js';
 import { createRuntime } from '../../core/runtime.js';
 import { createPolicyManager } from '../../permissions/manager.js';
@@ -29,7 +31,7 @@ import { getPackageMetadata } from '../../version.js';
 import { getOption, hasFlag, resolveRoot } from '../options.js';
 import { runLogin } from './login.js';
 
-const POLICY_CATEGORIES = new Set(['read', 'write', 'command', 'dangerous', 'outsideRoot']);
+const POLICY_CATEGORIES = new Set(['read', 'write', 'command', 'dangerous', 'outsideRoot', 'imageRead', 'imageSave', 'cacheManage', 'browserRead', 'browserNavigate', 'browserInteract', 'persistentProfile', 'browserCapture', 'browserDiagnostics', 'browserSensitive', 'browserExternal']);
 const POLICY_ACTIONS = new Set(['allow', 'ask', 'deny']);
 
 async function ensureCredentials() {
@@ -100,8 +102,14 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
   const policyFilePath = instancePolicyPath(instanceId);
   const policy = await loadInstancePolicy(instanceId);
   const policyManager = createPolicyManager(policy, { filePath: policyFilePath });
+  const browserIdentity = resolveCloudBrowserIdentity(credentials);
   const runtime = createRuntime({
     root,
+    instanceId,
+    principalId: browserIdentity.scopePrincipalId,
+    browserStoragePrincipalId: browserIdentity.storagePrincipalId,
+    legacyBrowserStoragePrincipalId: browserIdentity.legacyStoragePrincipalId,
+    cachePrincipalId: resolveCloudCachePrincipal(credentials),
     fullAccess: unrestrictedCommands,
     policyManager,
     interactive: useTui || mode === 'background'
@@ -139,7 +147,7 @@ export async function runCloud(args, { metadata: suppliedMetadata, updateStatus 
       }
     }
     const result = await baseManagementHandler(action, argumentsValue, context);
-    if (!['settings.get', 'instance.status', 'autostart.get'].includes(action)) {
+    if (!['settings.get', 'instance.status', 'autostart.get', 'permission.settled'].includes(action)) {
       runtime.eventBus.emit('management.changed', {
         requestId: context?.requestId ?? null,
         action,

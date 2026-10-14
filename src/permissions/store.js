@@ -29,13 +29,72 @@ export async function loadPolicy(filePath = defaultPolicyPath()) {
   }
 }
 
-async function writePolicy(policy, filePath) {
+async function writePolicy(policy, filePath, assertCurrent = () => {}) {
   const normalized = normalizePolicy(policy);
   await mkdir(path.dirname(filePath), { recursive: true });
   const temporary = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(temporary, `${JSON.stringify(normalized, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await rename(temporary, filePath);
-  return normalized;
+  try {
+    await writeFile(temporary, `${JSON.stringify(normalized, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    // Check right before the atomic commit. Reconnect invalidates old sockets;
+    // a stale management request must not publish a new policy file.
+    assertCurrent();
+    await rename(temporary, filePath);
+    return normalized;
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Claims and remote permission commits share the instance policy file lock.
+ * Ownership cannot change between verification and atomic policy rename.
+ */
+function generationPath(filePath) { return `${filePath}.remote-generation`; }
+async function assertGeneration(filePath, generation) {
+  if (typeof generation !== 'string' || !/^[0-9a-f-]{36}$/.test(generation)) {
+    throw Object.assign(new Error('Missing remote management generation.'), { code: 'MANAGEMENT_SESSION_STALE' });
+  }
+  let active;
+  try { active = (await readFile(generationPath(filePath), 'utf8')).trim(); }
+  catch { throw Object.assign(new Error('Remote management generation unavailable.'), { code: 'MANAGEMENT_SESSION_STALE' }); }
+  if (active !== generation) throw Object.assign(new Error('Remote management belongs to a superseded Agent process.'), { code: 'MANAGEMENT_SESSION_STALE' });
+}
+export async function claimPolicyRemoteGeneration(filePath, generation, assertCurrent = () => {}) {
+  return withPolicyLock(filePath, async () => {
+    assertCurrent();
+    if (typeof generation !== 'string' || !/^[0-9a-f-]{36}$/.test(generation)) {
+      throw Object.assign(new Error('Invalid generation token.'), { code: 'MANAGEMENT_SESSION_STALE' });
+    }
+    await writeFile(generationPath(filePath), generation + '\n', { mode: 0o600 });
+    assertCurrent();
+    return loadPolicy(filePath);
+  });
+}
+
+/**
+ * Explicit orphan recovery only: never evict from the normal acquire path.
+ * An ambiguous PID/ownership state fails closed; callers must opt in.
+ */
+export async function recoverOrphanedPolicyLock(filePath) {
+  const lockPath = `${filePath}.lock`;
+  let initial;
+  try { initial = await stat(lockPath); }
+  catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
+  if (Date.now() - initial.mtimeMs < 30_000) return false;
+  let record;
+  try { record = JSON.parse(await readFile(lockPath,'utf8')); }
+  catch { return false; }
+  if (!Number.isSafeInteger(record?.pid) || record.pid <= 0 || record.pid === process.pid) return false;
+  try { process.kill(record.pid,0); return false; }
+  catch(error) { if (error?.code !== 'ESRCH') return false; }
+  // Verify the same inode/file contents immediately before unlink; if another
+  // contender changed ownership, no recovery is permitted.
+  const current = await stat(lockPath).catch(()=>null);
+  if (!current || current.ino !== initial.ino || current.dev !== initial.dev || current.mtimeMs !== initial.mtimeMs) return false;
+  const reread = await readFile(lockPath,'utf8').catch(()=>null);
+  if (!reread || reread !== JSON.stringify(record)+'\n') return false;
+  await rm(lockPath);
+  return true;
 }
 
 async function withPolicyLock(filePath, callback) {
@@ -55,13 +114,9 @@ async function withPolicyLock(filePath, callback) {
       }
     } catch (error) {
       if (error?.code !== 'EEXIST') throw error;
-      try {
-        const info = await stat(lockPath);
-        if (Date.now() - info.mtimeMs > 30_000) {
-          await rm(lockPath, { force: true });
-          continue;
-        }
-      } catch {}
+      // Never steal a lock solely because its mtime is old: the holder may
+      // still be alive, paused, or doing a slow file commit. Fail closed here.
+      // Recovery of an orphaned lock requires a separately verified owner check.
       if (Date.now() >= deadline) throw new Error(`Timed out waiting for permission policy lock: ${filePath}`);
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
@@ -72,8 +127,10 @@ export async function savePolicy(policy, filePath = defaultPolicyPath()) {
   return withPolicyLock(filePath, () => writePolicy(policy, filePath));
 }
 
-export async function updatePolicy(filePath, updater, fallbackPolicy = undefined) {
+export async function updatePolicy(filePath, updater, fallbackPolicy = undefined, { assertCurrent = () => {}, remoteGeneration } = {}) {
   return withPolicyLock(filePath, async () => {
+    assertCurrent();
+    if (remoteGeneration !== undefined) await assertGeneration(filePath, remoteGeneration);
     let current;
     try {
       current = normalizePolicy(JSON.parse(await readFile(filePath, 'utf8')));
@@ -82,7 +139,10 @@ export async function updatePolicy(filePath, updater, fallbackPolicy = undefined
       current = normalizePolicy(fallbackPolicy);
     }
     const next = normalizePolicy(await updater(current));
-    return writePolicy(next, filePath);
+    assertCurrent();
+    if (remoteGeneration !== undefined) await assertGeneration(filePath, remoteGeneration);
+    // The lock remains held until the atomic rename is complete.
+    return writePolicy(next, filePath, assertCurrent);
   });
 }
 

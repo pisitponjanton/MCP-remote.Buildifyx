@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { AgentError, ErrorCode, normalizeError } from './errors.js';
+import { AgentError, ErrorCode, normalizeToolError, publicToolError } from './errors.js';
 
 function compactText(value, maxLength = 160) {
   if (typeof value !== 'string' || value.length <= maxLength) return value;
@@ -8,6 +8,11 @@ function compactText(value, maxLength = 160) {
 
 function summarizeInput(toolName, input = {}) {
   const summary = { ...input };
+  if (toolName.startsWith('browser_')) {
+    if (Object.hasOwn(summary, 'value')) summary.value = '<redacted>';
+    if (Object.hasOwn(summary, 'url')) summary.url = '[redacted URL]';
+    if (Object.hasOwn(summary, 'target')) summary.target = '[redacted target]';
+  }
   if (typeof summary.content === 'string') summary.content = `<${summary.content.length} chars>`;
   if (Array.isArray(summary.lines)) summary.lines = `<${summary.lines.length} lines>`;
   if (Array.isArray(summary.args)) {
@@ -34,7 +39,7 @@ export function createDispatcher({ services, authorize, eventBus, requestLifecyc
     if (typeof handler !== 'function') {
       const error = new AgentError(ErrorCode.TOOL_NOT_FOUND, `Unknown tool: ${toolName}`, { toolName });
       eventBus?.emit('tool.started', { requestId, tool: toolName, input: summarizeInput(toolName, input) });
-      eventBus?.emit('tool.failed', { requestId, tool: toolName, durationMs: Date.now() - startedAt, error: { code: error.code, message: error.message } });
+      eventBus?.emit('tool.failed', { requestId, tool: toolName, durationMs: Date.now() - startedAt, error: publicToolError(error) });
       throw error;
     }
 
@@ -42,11 +47,11 @@ export function createDispatcher({ services, authorize, eventBus, requestLifecyc
     try {
       requestContext = requestLifecycle?.begin?.(requestId) ?? {};
     } catch (error) {
-      const normalized = normalizeError(error);
+      const normalized = normalizeToolError(error);
       eventBus?.emit('tool.rejected', {
         requestId,
         tool: toolName,
-        error: { code: normalized.code, message: normalized.message }
+        error: publicToolError(normalized)
       });
       throw normalized;
     }
@@ -68,12 +73,12 @@ export function createDispatcher({ services, authorize, eventBus, requestLifecyc
       return result;
     } catch (error) {
       outcome = 'failed';
-      const normalized = normalizeError(error);
+      const normalized = normalizeToolError(error);
       eventBus?.emit('tool.failed', {
         requestId,
         tool: toolName,
         durationMs: Date.now() - startedAt,
-        error: { code: normalized.code, message: normalized.message }
+        error: publicToolError(normalized)
       });
       throw normalized;
     } finally {

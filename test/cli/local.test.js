@@ -5,6 +5,7 @@ import { createServer as createHttpServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { execFileSync, spawn } from 'node:child_process';
 import test from 'node:test';
 import { getMcpToolDefinitions } from '../../src/transport/mcp/tools/registry.js';
@@ -15,6 +16,7 @@ import { terminateRecoveredProcess } from '../../src/utils/instances.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const cliPath = path.join(repoRoot, 'src', 'cli.js');
+const require = createRequire(import.meta.url);
 
 async function freePort() {
   const server = net.createServer();
@@ -188,7 +190,7 @@ test('one local MCP port routes shared tools to multiple local instances', async
     await waitFor(async () => (await localRecords(fixture)).filter((item) => item.status === 'connected').length === 2);
     const localRecord = (await localRecords(fixture))[0];
     const localPolicy = JSON.parse(await readFile(instancePolicyPath(localRecord.instanceId, path.join(fixture.buildifyxHome, 'local')), 'utf8'));
-    assert.deepEqual(localPolicy.categories, { read: 'allow', write: 'allow', command: 'allow', dangerous: 'ask', outsideRoot: 'ask' });
+    assert.deepEqual(localPolicy.categories, { read: 'allow', write: 'allow', command: 'allow', dangerous: 'ask', outsideRoot: 'ask', imageRead: 'ask', imageSave: 'ask', cacheManage: 'ask', browserRead: 'ask', browserNavigate: 'ask', browserInteract: 'ask', persistentProfile: 'ask', browserCapture: 'ask', browserDiagnostics: 'ask', browserSensitive: 'ask', browserExternal: 'ask' });
 
     const sessionId = await initializeMcp(port);
     const tools = await mcpCall(port, sessionId, 2, 'tools/list', {});
@@ -543,6 +545,102 @@ test('local MCP cancellation stops an active runtime command', async () => {
     controller.abort();
     await call;
   } finally {
+    await cleanupFixture(fixture);
+  }
+});
+test('local MCP returns real ImageContent through bounded per-instance IPC chunks', async () => {
+  const fixture = await setupFixture();
+  const port = await freePort();
+  try {
+    const { randomBytes } = await import('node:crypto');
+    const sharp = require('sharp');
+    const width = 800, height = 700;
+    const image = await sharp(randomBytes(width * height * 3), {
+      raw: { width, height, channels: 3 }
+    }).png().toBuffer();
+    assert.ok(image.length > 1024 * 1024);
+    await writeFile(path.join(fixture.workspaceA, 'large-image.png'), image);
+    assert.equal((await runCli(['local', 'up', String(port)], fixture)).code, 0);
+    const started = await runCli(['local', '-d', '--root', fixture.workspaceA, '--name', 'image-local'], fixture);
+    assert.equal(started.code, 0, started.stderr);
+    await waitFor(async () => (await localRecords(fixture)).some(r => r.name === 'image-local' && r.status === 'connected'));
+    const record = (await localRecords(fixture)).find(r => r.name === 'image-local');
+    const changed = await requestInstanceControl(record, 'policy.setCategory', {
+      timeoutMs: 1500, payload: { category: 'imageRead', action: 'allow' }
+    });
+    assert.equal(changed.ok, true);
+    const sessionId = await initializeMcp(port);
+    const response = await mcpCall(port, sessionId, 2, 'tools/call', {
+      name: 'read_image', arguments: { path: 'large-image.png' }
+    });
+    assert.equal(response.result.isError ?? false, false, JSON.stringify(response.result.structuredContent?.error));
+    const result = response.result;
+    assert.equal(result.structuredContent.imageBytesDelivered, true);
+    const imageBlock = result.content.find(block => block.type === 'image');
+    assert.equal(imageBlock.mimeType, 'image/png');
+    assert.deepEqual(Buffer.from(imageBlock.data, 'base64'), image);
+    const reused = await mcpCall(port, sessionId, 3, 'tools/call', {
+      name: 'get_cached_image', arguments: { artifactId: result.structuredContent.artifactId }
+    });
+    assert.equal(reused.result.structuredContent.imageBytesDelivered, true);
+    assert.deepEqual(Buffer.from(reused.result.content.find(b => b.type === 'image').data, 'base64'), image);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+test('Local MCP Browser Tools open, snapshot, navigate and close an isolated Chromium session', async () => {
+  const fixture = await setupFixture();
+  const { chromium } = require('playwright');
+  fixture.extraEnv.PLAYWRIGHT_BROWSERS_PATH = chromium.executablePath().split(/[/\\]chromium(?:_headless_shell)?-\d+[/\\]/)[0];
+  const port = await freePort();
+  const pageServer = createHttpServer((req,res) => {
+    res.setHeader('Content-Type','text/html');
+    res.end(req.url === '/next' ? '<title>Next</title><h1>Next page</h1>' : '<title>Home</title><h1>Hello local browser</h1>');
+  });
+  await new Promise(resolve => pageServer.listen(0, '127.0.0.1', resolve));
+  const pageUrl = 'http://127.0.0.1:' + pageServer.address().port + '/';
+  try {
+    assert.equal((await runCli(['local','up',String(port)],fixture)).code,0);
+    const started = await runCli(['local','-d','--root',fixture.workspaceA,'--name','browser-local'],fixture);
+    assert.equal(started.code,0,started.stderr);
+    await waitFor(async () => (await localRecords(fixture)).some(x => x.name === 'browser-local' && x.status === 'connected'));
+    const record = (await localRecords(fixture)).find(x => x.name === 'browser-local');
+    for (const category of ['browserNavigate','browserRead','browserInteract','browserCapture','browserDiagnostics']) {
+      const result = await requestInstanceControl(record,'policy.setCategory',{timeoutMs:2000,payload:{category,action:'allow'}});
+      assert.equal(result.ok,true);
+    }
+    const session = await initializeMcp(port);
+    const call = async (id,name,args) => {
+      const reply = await mcpCall(port,session,id,'tools/call',{name,arguments:args});
+      assert.equal(reply.result.isError ?? false,false,JSON.stringify(reply.result));
+      return reply.result.structuredContent;
+    };
+    const opened = await call(2,'browser_open',{url:pageUrl});
+    assert.equal(opened.title,'Home');
+    const snapshot = await call(3,'browser_snapshot',{sessionId:opened.sessionId});
+    assert.match(snapshot.text,/Hello local browser/);
+    const moved = await call(4,'browser_navigate',{sessionId:opened.sessionId,url:pageUrl+'next'});
+    assert.equal(moved.title,'Next');
+    const tabs = await call(5,'browser_tabs',{sessionId:opened.sessionId});
+    assert.equal(tabs.tabs.length,1);
+    const media = await mcpCall(port, session, 6, 'tools/call', {
+      name: 'browser_screenshot', arguments: { sessionId: opened.sessionId, label: 'local_capture',
+        viewportPreset:'mobile', deviceScaleFactor:2, scale:'device' }
+    });
+    assert.equal(media.result.isError ?? false, false, JSON.stringify(media.result.structuredContent?.error));
+    assert.equal(media.result.structuredContent.imageBytesDelivered, true);
+    assert.equal(media.result.structuredContent.deviceScaleFactor, 2);
+    assert.equal(media.result.structuredContent.mobileLayout, true);
+    const image = media.result.content.find(x => x.type === 'image');
+    assert.equal(image?.mimeType, 'image/png');
+    const meta = await require('sharp')(Buffer.from(image.data, 'base64')).metadata();
+    assert.equal(meta.width,780);
+    assert.equal(meta.height,1688);
+    assert.equal((await call(7, 'browser_diagnostics', { sessionId: opened.sessionId })).redacted, true);
+    const closed = await call(8,'browser_close',{sessionId:opened.sessionId});
+    assert.equal(closed.closed,true);
+  } finally {
+    await new Promise(resolve => pageServer.close(resolve));
     await cleanupFixture(fixture);
   }
 });

@@ -1,5 +1,6 @@
 import { AgentError, ErrorCode } from './errors.js';
 import { createDispatcher } from './dispatcher.js';
+import { createBrowserSessionEngine } from '../browser/session-engine.js';
 import { createServices } from '../services/index.js';
 import { createEventBus } from '../events/bus.js';
 import { createApprovalQueue } from '../permissions/approvals.js';
@@ -132,6 +133,14 @@ function createRequestLifecycle() {
 export function createRuntime({
   root,
   fullAccess = false,
+  namespace = 'cloud',
+  imageCache,
+  instanceId,
+  principalId,
+  cachePrincipalId = principalId,
+  browserStoragePrincipalId = principalId,
+  legacyBrowserStoragePrincipalId = null,
+  browserOptions = {},
   permissions,
   policy = legacyPermissionsToPolicy(permissions),
   policyManager = createPolicyManager(normalizePolicy(policy)),
@@ -140,8 +149,31 @@ export function createRuntime({
   interactive = !permissions
 }) {
   const activeApprovalQueue = interactive ? (approvalQueue ?? createApprovalQueue({ eventBus })) : null;
-  const services = createServices({ root, fullAccess });
-  const authorize = createPermissionController({ root, policyManager, approvalQueue: activeApprovalQueue, eventBus });
+  const browserEngines = new Set();
+  const makeBrowserEngine = ({ instanceId: ownerInstance, principalId: ownerPrincipal, ...options }) => {
+    const engine = createBrowserSessionEngine({ ...browserOptions, ...options,
+      workspaceRoot: root, namespace, instanceId: ownerInstance, principalId: ownerPrincipal,
+      storagePrincipalId: browserStoragePrincipalId, legacyStoragePrincipalId: legacyBrowserStoragePrincipalId });
+    browserEngines.add(engine);
+    return engine;
+  };
+  const services = createServices({ root, fullAccess, namespace, imageCache, cachePrincipalId, getPolicy: () => policyManager.get(),
+    browser: instanceId && principalId ? { instanceId, principalId, createEngine: makeBrowserEngine } : undefined });
+  let previousCategories = { ...policyManager.get().categories };
+  const unsubscribeBrowserPolicy = policyManager.subscribe(next => {
+    const current = next.categories;
+    const restricted = ['browserNavigate', 'browserRead', 'browserExternal']
+      .some(key => previousCategories[key] !== 'deny' && current[key] === 'deny');
+    const persistentRestricted = previousCategories.persistentProfile !== 'deny' && current.persistentProfile === 'deny';
+    const imageImportRestricted = ['imageRead', 'cacheManage'].some(key =>
+      previousCategories[key] === 'allow' && current[key] !== 'allow');
+    previousCategories = { ...current };
+    if (imageImportRestricted) services.__clearCloudImports?.();
+    if (restricted) void services.closeActive?.().catch(() => undefined);
+    else if (persistentRestricted) void services.closeActive?.({ persistentOnly: true }).catch(() => undefined);
+  });
+  const authorize = createPermissionController({ root, policyManager, approvalQueue: activeApprovalQueue, eventBus,
+    artifactRequiresCapture: services.__artifactRequiresCapture });
   const requestLifecycle = createRequestLifecycle();
   const dispatch = createDispatcher({ services, authorize, eventBus, requestLifecycle });
   const cancellationError = (reason) => new AgentError(ErrorCode.REQUEST_CANCELLED, reason);
@@ -154,6 +186,10 @@ export function createRuntime({
     approvalQueue: activeApprovalQueue,
     services,
     dispatch,
+    createBrowserEngine({ instanceId, principalId, ...options } = {}) {
+      if (!requestLifecycle.acceptingRequests) throw cancellationError('Agent is shutting down');
+      return makeBrowserEngine({ instanceId, principalId, ...options });
+    },
     cancel(requestId, reason = 'Cloud request was cancelled') {
       const error = cancellationError(reason);
       const requestCancelled = requestLifecycle.cancel(requestId, error);
@@ -165,9 +201,18 @@ export function createRuntime({
     async stop(reason = 'Agent is shutting down', { force = false } = {}) {
       const error = cancellationError(reason);
       requestLifecycle.stop(error);
+      unsubscribeBrowserPolicy();
       activeApprovalQueue?.cancelAll?.(error);
       await services.run_command?.stopAll?.(error, { force });
       await requestLifecycle.waitForIdle(force ? 500 : 2000);
+      services.closeImageCache?.();
+      await services.closeBrowserControls?.();
+      const failures = [];
+      for (const engine of browserEngines) {
+        try { await engine.closeAll(); } catch (error) { failures.push(error); }
+      }
+      browserEngines.clear();
+      if (failures.length) throw failures[0];
     },
     get acceptingRequests() { return requestLifecycle.acceptingRequests; }
   };

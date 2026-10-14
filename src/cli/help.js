@@ -34,6 +34,8 @@ Account and maintenance:
   bdxa logout                  Revoke this device credential
   bdxa status                  Check device authentication status
   bdxa doctor                  Check the local agent environment
+  bdxa browser check           Check whether Playwright Chromium is available
+  bdxa browser install         Download Playwright Chromium explicitly (opt-in)
   bdxa update                  Update Buildifyx Desktop Agent from npm
   bdxa update --restart        Update, then restart running Cloud/Local background instances
   bdxa help                    Show this help message

@@ -65,7 +65,8 @@ test('cloud transport keeps tool calls working while management stays on a separ
     assert.equal(ready.instanceId, 'inst_test');
     assert.deepEqual(ready.capabilities, {
       managementVersion: 1,
-      actions: ['settings.get', 'instance.restart']
+      actions: ['settings.get', 'instance.restart'],
+      media: { version: 1, features: ['transfer-chunks-v1', 'image-content', 'image-import-v1'], maxChunkBytes: 131072 }
     });
 
     serverSocket.send(JSON.stringify({

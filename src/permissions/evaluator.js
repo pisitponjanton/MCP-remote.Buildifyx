@@ -11,7 +11,25 @@ const TOOL_CATEGORY = Object.freeze({
   create_workspace_plan: 'write',
   update_workspace_plan_intent: 'write',
   complete_workspace_phase: 'write',
-  clear_workspace_plan: 'write'
+  clear_workspace_plan: 'write',
+  read_image: 'imageRead',
+  get_image_info: 'imageRead',
+  resize_image: 'imageRead',
+  save_image: 'imageSave',
+  list_cached_assets: 'cacheManage',
+  get_cached_image: 'imageRead',
+  save_cached_image: 'imageSave',
+  delete_cached_asset: 'cacheManage',
+  clear_cache: 'cacheManage',
+  browser_open: 'browserNavigate',
+  browser_navigate: 'browserNavigate',
+  browser_snapshot: 'browserRead',
+  browser_click: 'browserInteract',
+  browser_fill: 'browserInteract',
+  browser_tabs: 'browserRead',
+  browser_close: 'browserRead',
+  browser_screenshot: 'browserCapture',
+  browser_diagnostics: 'browserDiagnostics'
 });
 
 const FILE_TOOLS = new Set(['list_directory', 'read_file', 'write_file', 'edit_file']);
@@ -98,6 +116,15 @@ export function isDangerousCommand(command, args = []) {
   return false;
 }
 
+export function getRequestedPaths(toolName, input = {}) {
+  const all = [];
+  if (FILE_TOOLS.has(toolName) && typeof input.path === 'string') all.push({ key: 'path', value: input.path, newFile: toolName === 'write_file' });
+  if (toolName === 'run_command' && typeof input.cwd === 'string') all.push({ key: 'cwd', value: input.cwd, newFile: false });
+  if (['read_image', 'get_image_info', 'resize_image', 'save_image'].includes(toolName) && typeof input.path === 'string') all.push({ key: 'sourcePath', value: input.path, newFile: false });
+  if (['save_image', 'save_cached_image'].includes(toolName) && typeof input.destinationPath === 'string') all.push({ key: 'destinationPath', value: input.destinationPath, newFile: true });
+  return all;
+}
+
 export function getRequestedPath(toolName, input = {}) {
   if (FILE_TOOLS.has(toolName) && typeof input.path === 'string') return input.path;
   if (toolName === 'run_command' && typeof input.cwd === 'string') return input.cwd;
@@ -118,7 +145,8 @@ export function evaluateOutsideRoot(policy) {
 }
 
 export function evaluateRequest({ toolName, input = {}, policy }) {
-  const category = TOOL_CATEGORY[toolName];
+  const category = toolName === 'browser_tabs' && ['new', 'close'].includes(input.action)
+    ? 'browserInteract' : TOOL_CATEGORY[toolName];
   if (!category) return { decision: Decision.DENY, category: 'unknown', reason: 'Unknown tool' };
 
   if (toolName === 'run_command') {

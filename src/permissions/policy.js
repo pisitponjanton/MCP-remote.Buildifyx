@@ -10,7 +10,18 @@ export const DEFAULT_POLICY = Object.freeze({
     write: Decision.ALLOW,
     command: Decision.ALLOW,
     dangerous: Decision.ASK,
-    outsideRoot: Decision.ASK
+    outsideRoot: Decision.ASK,
+    imageRead: Decision.ASK,
+    imageSave: Decision.ASK,
+    cacheManage: Decision.ASK,
+    browserRead: Decision.ASK,
+    browserNavigate: Decision.ASK,
+    browserInteract: Decision.ASK,
+    persistentProfile: Decision.ASK,
+    browserCapture: Decision.ASK,
+    browserDiagnostics: Decision.ASK,
+    browserSensitive: Decision.ASK,
+    browserExternal: Decision.ASK
   },
   additionalRoots: [],
   commandRules: []

@@ -7,15 +7,33 @@ test('tool registry exposes the complete MCP tool list', () => {
   assert.deepEqual(
     definitions.map((tool) => tool.name).sort(),
     [
+      'browser_click',
+      'browser_close',
+      'browser_diagnostics',
+      'browser_fill',
+      'browser_navigate',
+      'browser_open',
+      'browser_screenshot',
+      'browser_snapshot',
+      'browser_tabs',
+      'clear_cache',
       'clear_workspace_plan',
       'complete_workspace_phase',
       'create_workspace_plan',
+      'delete_cached_asset',
       'edit_file',
+      'get_cached_image',
+      'get_image_info',
       'get_system_info',
       'get_workspace_plan',
+      'list_cached_assets',
       'list_directory',
       'read_file',
+      'read_image',
+      'resize_image',
       'run_command',
+      'save_cached_image',
+      'save_image',
       'update_workspace_plan_intent',
       'write_file'
     ]
@@ -27,7 +45,7 @@ test('tool manifest is deterministic and fingerprints definition changes', () =>
   const second = createToolManifest({ fullAccess: false });
   const fullAccess = createToolManifest({ fullAccess: true });
 
-  assert.equal(first.count, 11);
+  assert.equal(first.count, 29);
   assert.equal(first.hash, second.hash);
   assert.equal(first.shortHash.length, 8);
   assert.notEqual(first.hash, fullAccess.hash);

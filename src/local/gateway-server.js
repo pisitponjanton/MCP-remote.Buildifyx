@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import { McpServer } from '@modelcontextprotocol/server';
@@ -8,6 +8,8 @@ import { listInstances } from '../utils/instances.js';
 import { requestInstanceControl } from '../utils/instance-control.js';
 import { getMcpToolDefinitions } from '../transport/mcp/tools/registry.js';
 import { errorResult, successResult } from '../transport/mcp/response.js';
+import { isMediaResult, receiveChunks } from '../transport/media/protocol.js';
+import { mediaMcpResult } from '../transport/media/mcp-image.js';
 import { resolveWorkspaceTarget, selectedTarget, workspaceSummary } from './workspace-routing.js';
 import { AgentError, ErrorCode } from '../core/errors.js';
 
@@ -66,6 +68,7 @@ export function createLocalGateway({ environment, version, gatewayId, controlTok
       session.target = selectedTarget(target);
       requestId = `local_${randomUUID()}`;
       const timeoutMs = LOCAL_TOOL_CALL_TIMEOUT_MS;
+      const mediaSecret = randomBytes(32).toString('hex');
       let cancelSent = false;
       const sendCancel = async (reason) => {
         if (cancelSent || !target || !requestId) return;
@@ -83,16 +86,32 @@ export function createLocalGateway({ environment, version, gatewayId, controlTok
         response = await requestInstanceControl(target.record, 'tool.call', {
           timeoutMs,
           signal,
-          payload: { requestId, tool, arguments: toolArgs }
+          payload: { requestId, tool, arguments: toolArgs, mediaSecret }
         });
       } finally {
         signal?.removeEventListener('abort', onAbort);
       }
       if (!response?.ok) throw Object.assign(new Error(response?.error ?? 'Local instance tool call failed.'), { code: response?.code });
       const result = response.result;
-      return definition.toMcpResult
-        ? definition.toMcpResult(result)
-        : successResult(result);
+      if (isMediaResult(tool, result)) {
+        const invoke = async (command, payload, signalToUse = signal) => {
+          const reply = await requestInstanceControl(target.record, command, {
+            timeoutMs: 15_000, signal: signalToUse,
+            payload: { requestId, secret: mediaSecret, ...payload }
+          });
+          if (!reply?.ok) throw Object.assign(new Error(reply?.error ?? 'Local image transfer failed.'), { code: reply?.code ?? 'MEDIA_ERROR' });
+          return reply.media;
+        };
+        const image = await receiveChunks({
+          signal,
+          open: () => invoke('media.open', { artifactId: result.artifactId }),
+          chunk: (payload) => invoke('media.chunk', payload),
+          finish: (payload) => invoke('media.finish', payload),
+          cancel: (payload) => invoke('media.cancel', payload, null)
+        });
+        return mediaMcpResult(result, image);
+      }
+      return definition.toMcpResult ? definition.toMcpResult(result) : successResult(result);
     } catch (error) {
       if (target && requestId && error?.code === 'INSTANCE_CONTROL_TIMEOUT') {
         await requestInstanceControl(target.record, 'tool.cancel', {

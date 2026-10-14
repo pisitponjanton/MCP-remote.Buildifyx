@@ -23,7 +23,7 @@ function printUpdateNotice(status) {
 async function getInvocationUpdateStatus(command, args, metadata) {
   if (process.env.BUILDFYX_SKIP_UPDATE_CHECK === '1') return null;
   if (command.startsWith('__')) return null;
-  if (command === 'update' || command === 'u' || command === 'doctor' || command === 'd') return null;
+  if (command === 'update' || command === 'u' || command === 'doctor' || command === 'd' || command === 'browser') return null;
   if (args.includes('--background-child') || args.includes('--handoff-child')) return null;
   return checkForUpdate(metadata.name, metadata.version, { timeoutMs: 1200 });
 }
@@ -179,6 +179,12 @@ export async function runCli(argv = process.argv.slice(2)) {
     case 'r':
       printUpdateNotice(updateStatus);
       throw new Error('Legacy remote mode has been removed. Use `bdxa` for Cloud or `bdxa local` for Local MCP.');
+    case 'browser': {
+      const { runBrowser } = await import('./commands/browser.js');
+      const browser = await runBrowser(args);
+      if (!browser.installed) process.exitCode = 1;
+      return;
+    }
     case 'doctor':
     case 'd':
       printUpdateNotice(updateStatus);

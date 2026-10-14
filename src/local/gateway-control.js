@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export const DEFAULT_LOCAL_PORT = 3333;
@@ -71,7 +71,30 @@ async function acquireGatewayStartupLock(environment, timeoutMs = 15_000) {
         try { stale = Date.now() - (await stat(filePath)).mtimeMs > 10_000; } catch { stale = true; }
       }
       if (stale) {
-        await rm(filePath, { force: true });
+        // Serialize stale-lock reclamation: two concurrent `local up` processes
+        // must never remove each other's newly-acquired live startup lock.
+        const guard = `${filePath}.reclaim`;
+        try { await mkdir(guard, { mode: 0o700 }); }
+        catch (error) {
+          if (error?.code !== 'EEXIST') throw error;
+          try {
+            if (Date.now() - (await stat(guard)).mtimeMs > 30_000) await rmdir(guard);
+          } catch (guardError) { if (!['ENOENT', 'ENOTEMPTY'].includes(guardError?.code)) throw guardError; }
+          await new Promise((resolve) => setTimeout(resolve, 60));
+          continue;
+        }
+        try {
+          let stillStale = false;
+          try {
+            const latest = JSON.parse(await readFile(filePath, 'utf8'));
+            const created = Date.parse(latest?.createdAt ?? '');
+            stillStale = !isPidAlive(latest?.pid) || (Number.isFinite(created) && Date.now() - created > 30_000);
+          } catch {
+            try { stillStale = Date.now() - (await stat(filePath)).mtimeMs > 10_000; }
+            catch { stillStale = false; }
+          }
+          if (stillStale) await rm(filePath, { force: true });
+        } finally { await rmdir(guard).catch((error) => { if (error?.code !== 'ENOENT') throw error; }); }
         continue;
       }
       await new Promise((resolve) => setTimeout(resolve, 60));

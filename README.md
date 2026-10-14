@@ -2,10 +2,12 @@
 
 Buildifyx Desktop Agent (`bdxa`) exposes one or more user-controlled workspaces through Buildifyx Cloud or a loopback-only Local MCP gateway while keeping tool permissions enforced on the user's computer.
 
-Current package:
+**v0.4.0 development (release on HOLD):** [User Guide](docs/v0.4.0-user-guide.md) · [Architecture](docs/v0.4.0-architecture.md) · [Media contract](docs/v0.4.0-contracts.md) · [Cache](docs/v0.4.0-cache.md) · [Image Tools](docs/v0.4.0-images.md) · [Browser Engine](docs/v0.4.0-browser.md) · [Browser Controls](docs/v0.4.0-browser-control.md) · [Screenshots](docs/v0.4.0-screenshots.md) · [Security & Privacy](docs/v0.4.0-security.md) · [Phase 9 Integration Tests](docs/v0.4.0-integration-tests.md) · [Phase 11 Release Validation](docs/v0.4.0-release-validation.md) · [Phase 13 Release Gates](docs/v0.4.0-phase13-release-gates.md). Historical npm binary upgrades were tested against a synthetic authenticated Cloud mock; production Cloud/ChatGPT delivery, live signed-in device upgrade, and native Windows/Linux remain release blockers. A fresh macOS tarball with an isolated Chromium install passed on Node 20.9.0 and 24.20.0.
+
+Target package version (unpublished until release validation):
 
 ```text
-@buildifyx/desktop-agent@0.3.3
+@buildifyx/desktop-agent@0.4.0  (working tree; not yet published)
 ```
 
 Default cloud:
@@ -16,7 +18,7 @@ https://bdxa.buildifyx.com
 
 `bdxa` uses Cloud mode by default. Local MCP is opt-in through `bdxa local`, uses no Cloud login, and keeps its persistent state isolated under `~/.buildifyx/local/`.
 
-## Install
+## Install (v0.4.0 package once published)
 
 ```bash
 npm install -g @buildifyx/desktop-agent
@@ -28,6 +30,17 @@ Check the installation:
 bdxa --version
 bdxa doctor
 ```
+
+## Browser and image dependencies
+
+Image Tools use the packaged `sharp` dependency. Browser Tools require a separate Chromium installation; npm installation **does not download the browser**. These commands apply to both Cloud and Local Agent modes:
+
+```bash
+bdxa browser check             # offline executable availability check
+bdxa browser install           # explicit Playwright-managed Chromium download
+```
+
+Installing Chromium does not enable Browser permissions. Approval for Capture, Navigation, External Origins, Persistent Profiles and Sensitive Actions remains local. See the [v0.4.0 User Guide](docs/v0.4.0-user-guide.md).
 
 ## Cloud and Local modes
 
@@ -151,8 +164,6 @@ bdxa attach backend
 ```
 
 `bdxa attach` mirrors the same Activity, Cloud status, Permissions, Allowed Roots, Command Rules, Diagnostics, and Approval state owned by that running instance. `Ctrl+C` detaches the dashboard without stopping the agent.
-
-Stop and start background instances without removing them:
 
 Stop and start background instances without removing them:
 
@@ -349,7 +360,27 @@ create_workspace_plan
 update_workspace_plan_intent
 complete_workspace_phase
 clear_workspace_plan
+read_image
+get_image_info
+resize_image
+save_image
+list_cached_assets
+get_cached_image
+save_cached_image
+delete_cached_asset
+clear_cache
+browser_open
+browser_navigate
+browser_snapshot
+browser_click
+browser_fill
+browser_tabs
+browser_close
+browser_screenshot
+browser_diagnostics
 ```
+
+**Image/Browser v0.4.0:** PNG/JPEG/WebP image tools and Playwright Browser Tools require their own permission categories (default Ask). Captures and imports are stored in temporary per-workspace local Cache, and are only saved permanently by explicit `save_image` or `save_cached_image`. Local MCP can return actual ImageContent; Cloud returns metadata only unless Media v1 binary transfer is negotiated. See the [v0.4.0 User Guide](docs/v0.4.0-user-guide.md) for consent, workflows, cleanup and limitations.
 
 For source code, Markdown, and other text, prefer the dedicated file tools instead of shell-based file transport:
 
@@ -400,14 +431,14 @@ Logout revokes the device credential, so all instances using that credential los
 
 ## Update
 
-Most user-facing bdxa commands check the npm registry at startup. The check is skipped for `bdxa update`, `bdxa doctor`, and internal background/handoff child processes. If the installed version is older than the current npm `latest`, CLI commands print an update warning and the interactive dashboard shows the available version.
+Most user-facing bdxa commands check the npm registry at startup. The check is skipped for `bdxa update`, `bdxa doctor`, `bdxa browser`, and internal background/handoff child processes. If the installed version is older than npm `latest`, CLI commands print an update warning and the dashboard shows the available version.
 
 ```bash
 bdxa update
 bdxa update --restart
 ```
 
-`bdxa update` installs the latest public package globally. `bdxa update --restart` updates the package, restarts running Cloud background instances, and—when the Local gateway is active—restarts that gateway on the same port and then restarts running Local background instances. Foreground instances and stopped instances are not started automatically. Set `BUILDIFYX_SKIP_UPDATE_CHECK=1` only when an automated or offline environment must skip the startup version check.
+`bdxa update` installs the latest public package globally. `bdxa update --restart` updates the package and restarts running Cloud background instances plus the active Local gateway and running Local background instances. Existing `~/.buildifyx/credentials.json`, instance settings, and approved Browser Profiles must not be deleted or reissued as part of a normal update. Run `bdxa browser check` after upgrading: the matching Playwright Chromium installation is a separate opt-in step. The real v0.3.2/v0.3.3 signed-in upgrade matrix is still a release-validation gate. Set `BUILDIFYX_SKIP_UPDATE_CHECK=1` for offline automation.
 
 ## Useful commands
 

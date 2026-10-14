@@ -93,6 +93,7 @@ export async function runLogin(args, { showConnectHint = true } = {}) {
     deviceId,
     deviceName: response?.device?.name ?? os.hostname(),
     account: response?.user?.email ?? response?.account ?? null,
+    ...(typeof response?.user?.id === 'string' && response.user.id.trim() ? { accountId: response.user.id.trim() } : {}),
     deviceToken,
     expiresAt: deviceExpiresAt,
     loginTokenName,

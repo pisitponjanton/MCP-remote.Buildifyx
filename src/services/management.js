@@ -2,13 +2,15 @@ import path from 'node:path';
 import { AgentError, ErrorCode } from '../core/errors.js';
 import { isBuildifyxInternalPath } from '../security/path.js';
 
-const POLICY_CATEGORIES = new Set(['read', 'write', 'command', 'dangerous', 'outsideRoot']);
+const POLICY_CATEGORIES = new Set(['read', 'write', 'command', 'dangerous', 'outsideRoot', 'imageRead', 'imageSave', 'cacheManage', 'browserRead', 'browserNavigate', 'browserInteract', 'persistentProfile', 'browserCapture', 'browserDiagnostics', 'browserSensitive', 'browserExternal']);
 const POLICY_ACTIONS = new Set(['allow', 'ask', 'deny']);
 
 export const MANAGEMENT_ACTIONS = Object.freeze([
   'settings.get',
   'instance.status',
   'permission.set',
+  // Optional Management v1 action. Older installed Agents need not advertise it.
+  'permission.settled',
   'root.add',
   'root.remove',
   'commandRule.add',
@@ -52,6 +54,27 @@ export function createManagementHandler({
   getAutostart,
   setAutostart
 }) {
+  // One queue per category lives for the lifetime of this instance, not the
+  // WebSocket. New sessions cannot finish a conflicting write before old work.
+  const categoryTails = new Map();
+  async function orderedCategory(category, operation) {
+    const previous = categoryTails.get(category);
+    let release;
+    const tail = new Promise((resolve) => { release = resolve; });
+    categoryTails.set(category, tail);
+    try {
+      if (previous) await previous;
+      return await operation();
+    } finally {
+      if (categoryTails.get(category) === tail) categoryTails.delete(category);
+      release();
+    }
+  }
+  function assertLive(context) {
+    if (typeof context?.assertCurrent === 'function' && !context.assertCurrent()) {
+      throw new AgentError('MANAGEMENT_SESSION_STALE', 'Management request belongs to an old Agent session.');
+    }
+  }
   function snapshot() {
     const policy = policyManager.get();
     return {
@@ -66,7 +89,7 @@ export function createManagementHandler({
     };
   }
 
-  return async function handleManagement(action, args = {}) {
+  return async function handleManagement(action, args = {}, context = {}) {
     if (!MANAGEMENT_ACTIONS.includes(action)) {
       throw new AgentError('MANAGEMENT_ACTION_NOT_FOUND', `Unknown management action: ${action}`);
     }
@@ -85,11 +108,27 @@ export function createManagementHandler({
       };
     }
 
-    if (action === 'permission.set') {
-      if (!POLICY_CATEGORIES.has(args.category) || !POLICY_ACTIONS.has(args.action)) {
+    if (action === 'permission.set' || action === 'permission.settled') {
+      if (!POLICY_CATEGORIES.has(args.category)
+          || (action === 'permission.set' && !POLICY_ACTIONS.has(args.action))) {
         invalid('Invalid permission category or action.');
       }
-      return { policy: await policyManager.setCategory(args.category, args.action) };
+      // management.call handlers can overlap; the queue is intentionally
+      // shared across reconnects, including a settle barrier after lost ACK.
+      return orderedCategory(args.category, async () => {
+        assertLive(context);
+        if (action === 'permission.settled') {
+          // A successful barrier ACK proves that every earlier operation for
+          // this category on this Agent instance has reached a terminal state.
+          return { settled: true, category: args.category, policy: policyManager.get() };
+        }
+        const policy = await policyManager.setCategory(args.category, args.action, {
+          assertCurrent: () => assertLive(context),
+          remoteGeneration: context.remoteGeneration
+        });
+        assertLive(context);
+        return { policy };
+      });
     }
 
     if (action === 'root.add') {
