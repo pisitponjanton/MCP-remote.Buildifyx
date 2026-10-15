@@ -141,3 +141,7 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+# Internal AI-assisted development and release evidence (keep outside public Git/npm)
+docs/v0.4.0-phase*.md
+docs/v0.4.0-release-validation.md
+PHASE*.md

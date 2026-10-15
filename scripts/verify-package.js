@@ -25,7 +25,9 @@ const required = [
 const missing = required.filter(name => !paths.has(name));
 const forbidden = [...paths].filter(name =>
   /(^|\/)(?:node_modules|test|tests|\.env(?:\..*)?|credentials\.json|\.git)(\/|$)/i.test(name)
-  || /\.(?:log|pem|key|p12)$/i.test(name));
+  || /\.(?:log|pem|key|p12)$/i.test(name)
+  || /(?:^|\/)(?:PHASE[0-9][^/]*|v0\.4\.0-phase[0-9][^/]*)\.md$/i.test(name)
+  || /(?:^|\/)v0\.4\.0-release-validation\.md$/i.test(name));
 if (manifest?.name !== '@buildifyx/desktop-agent' || manifest.version !== '0.4.0') {
   throw new Error('npm tarball name/version does not match the v0.4.0 package contract.');
 }
