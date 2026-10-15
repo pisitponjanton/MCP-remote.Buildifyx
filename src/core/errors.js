@@ -90,9 +90,19 @@ export function publicToolError(error) {
               ? 'Invalid tool input.'
               : code === ErrorCode.TOOL_NOT_FOUND
                 ? 'Unknown tool.'
-                : domainCode.test(code)
-                  ? `Tool failed with ${code}.`
-                  : `Tool failed with ${code}.`;
+                : code === 'IMAGE_EXISTS'
+                  ? 'Destination file already exists. Choose a new filename; images are never overwritten.'
+                  : code === 'IMAGE_PATH_DENIED'
+                    ? 'Image path is not authorized. Choose a location inside an approved workspace root.'
+                    : code === 'IMAGE_PATH_CHANGED'
+                      ? 'Image destination path changed during validation. Check the folder and try again.'
+                      : code === 'MEDIA_IMPORT_PERMISSION_REQUIRED'
+                        ? 'Image import requires local imageRead and cacheManage permissions set to Allow.'
+                        : code === 'CACHE_NOT_FOUND'
+                          ? 'Temporary image was not found or has expired. Import the image again.'
+                          : domainCode.test(code)
+                            ? `Tool failed with ${code}.`
+                            : `Tool failed with ${code}.`;
   const details = normalized.details;
   const safeDetails = {};
   if ([ErrorCode.PERMISSION_DENIED, ErrorCode.CONFIRMATION_REQUIRED].includes(code) && details) {

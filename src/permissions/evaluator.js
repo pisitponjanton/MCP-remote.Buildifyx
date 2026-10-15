@@ -179,6 +179,9 @@ export function evaluateRequest({ toolName, input = {}, policy }) {
 
 export function describeRequest(toolName, input = {}) {
   if (toolName === 'run_command') return `${input.command ?? ''} ${(input.args ?? []).join(' ')}`.trim();
+  if (toolName === 'save_cached_image' && typeof input.destinationPath === 'string') {
+    return `${toolName}: ${input.destinationPath}`;
+  }
   if (typeof input.path === 'string') return `${toolName}: ${input.path}`;
   return toolName;
 }

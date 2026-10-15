@@ -321,14 +321,33 @@ export function createImageServices({ root, namespace = 'cloud', principalId = n
     async save_cached_image({ artifactId, destinationPath }, context = {}) {
       pruneImports();
       const temporary=imported.get(artifactId);
-      if(temporary) {
+      if (temporary) {
         requireImportPermission();
         context.throwIfCancelled?.();
-        const info=await inspectImage(temporary.data);
-        requireImportPermission();
-        // Only this explicit save tool may create a new durable workspace file.
-        const saved=await writeDurable(root,destinationPath,temporary.data,context);
-        return { ...saved, mimeType:info.mimeType, sha256:info.sha256 };
+        // Use a private copy: disconnect/revoke/clear_cache zeroes the RAM
+        // artifact, but must never turn an already committed save into zeros.
+        const data = Buffer.from(temporary.data);
+        try {
+          const info = await inspectImage(data);
+          const ensureCurrentImport = () => {
+            pruneImports();
+            requireImportPermission();
+            if (imported.get(artifactId) !== temporary) {
+              throw problem('MEDIA_IMPORT_PERMISSION_REQUIRED', 'Temporary image is no longer authorized.');
+            }
+          };
+          ensureCurrentImport();
+          // Recheck the import source after the potentially asynchronous
+          // destination-path classification and after imageSave checks.
+          const saveContext = { ...context, assertStillAllowed() {
+            context.assertStillAllowed?.();
+            ensureCurrentImport();
+          } };
+          const saved = await writeDurable(root, destinationPath, data, saveContext);
+          return { ...saved, mimeType: info.mimeType, sha256: info.sha256 };
+        } finally {
+          data.fill(0);
+        }
       }
       await ready();
       // Keep the transfer lease until the permanent save completes.
