@@ -20,7 +20,7 @@ const required = [
   'src/image/service.js', 'src/services/browser.js',
   'src/transport/mcp/tools/browser.js', 'src/transport/mcp/tools/images.js',
   'src/transport/media/protocol.js',
-  'docs/v0.4.0-security.md', 'docs/v0.4.0-integration-tests.md'
+  'docs/v0.4.0-security.md', 'docs/v0.4.0-media.md', 'docs/v0.4.0-user-guide.md'
 ];
 const missing = required.filter(name => !paths.has(name));
 const forbidden = [...paths].filter(name =>
