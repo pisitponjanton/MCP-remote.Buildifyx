@@ -165,6 +165,20 @@ test('Phase 5: loopback Cloud-protocol import → actual Agent tool calls → ex
       assert.deepEqual(b.info.height, a.info.height);
       assert.deepEqual(b.data, a.data);
       assert.deepEqual(await readdir(f.root), [filename]);
+
+      // An imported artifact must never be able to overwrite a file that has
+      // already been committed to the test workspace. Verify over the same
+      // authenticated Cloud WebSocket tool transport, not only at service level.
+      const repeatRequestId = 'remote-save-again-' + format;
+      f.send({ type: 'tool.call', instanceId: 'test-instance',
+        requestId: repeatRequestId, tool: 'save_cached_image',
+        arguments: { artifactId: imported.artifactId, destinationPath: filename } });
+      const rejected = await f.response('tool.error', repeatRequestId);
+      assert.equal(rejected.error?.code, 'IMAGE_EXISTS');
+      assert.deepEqual(await readdir(f.root), [filename]);
+      const preserved = await readFile(path.join(f.root, filename));
+      assert.equal(sha256(preserved), digest,
+        'existing destination bytes must remain unchanged after rejected overwrite');
     });
   }
 });
