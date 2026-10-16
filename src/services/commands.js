@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { resolveSafePath } from '../security/path.js';
+import { AgentError, ErrorCode, asFileError } from '../core/errors.js';
 
 export const MAX_OUTPUT_BYTES = 256 * 1024;
 export const MAX_TIMEOUT_MS = 60_000;
@@ -21,16 +22,16 @@ function compactArgs(args) {
 
 function validateExecutableName(command) {
   if (command.includes('/') || command.includes('\\') || path.basename(command) !== command) {
-    throw new Error('Command must be an executable name, not a path.');
+    throw new AgentError(ErrorCode.INVALID_INPUT, 'Command must be an executable name, not a path.');
   }
 }
 
 function validateRestrictedArgs(command, args) {
   if (command === 'npm' && (args[0] === 'exec' || args[0] === 'x')) {
-    throw new Error('npm exec is not allowed in restricted mode.');
+    throw new AgentError(ErrorCode.COMMAND_NOT_ALLOWED, 'npm exec is not allowed in restricted mode.');
   }
   if ((command === 'pnpm' || command === 'yarn') && (args[0] === 'dlx' || args[0] === 'exec')) {
-    throw new Error(`${command} ${args[0]} is not allowed in restricted mode.`);
+    throw new AgentError(ErrorCode.COMMAND_NOT_ALLOWED, `${command} ${args[0]} is not allowed in restricted mode.`);
   }
 }
 
@@ -38,7 +39,7 @@ export function validateCommandPolicy(command, args, { fullAccess = false, allow
   validateExecutableName(command);
   if (fullAccess || allowCustomCommand) return;
   if (!RESTRICTED_COMMANDS.has(command)) {
-    throw new Error(`Command is not allowed in restricted mode: ${command}`);
+    throw new AgentError(ErrorCode.COMMAND_NOT_ALLOWED, `Command is not allowed in restricted mode: ${command}`);
   }
   validateRestrictedArgs(command, args);
 }
@@ -196,7 +197,9 @@ function executeFile(executable, args, options, { requestId, register, unregiste
       clearTimeout(forceTimer);
       unregister(requestId, handle);
       resolveExit();
-      reject(new Error(`Failed to start ${executable}: ${error.message}`));
+      reject(error?.code === 'ENOENT'
+        ? new AgentError(ErrorCode.COMMAND_NOT_FOUND, `Failed to start ${executable}: ${error.message}`)
+        : asFileError(error));
     });
 
     child.once('close', (code, signal) => {
@@ -246,10 +249,15 @@ export function createCommandService({ root, fullAccess = false }) {
   async function runCommand({ command, args = [], cwd = '.', timeoutMs = 15_000 }, context = {}) {
     validateCommandPolicy(command, args, { fullAccess, allowCustomCommand: context.allowCustomCommand });
 
-    const resolvedCwd = context.pathInfo?.resolved ?? await resolveSafePath(root, cwd);
+    const resolvedCwd = context.pathInfo?.resolved ?? await resolveSafePath(root, cwd).catch(error => {
+      if ([ErrorCode.FILE_NOT_FOUND, ErrorCode.FILE_PARENT_NOT_FOUND].includes(error?.code)) {
+        throw new AgentError(ErrorCode.COMMAND_CWD_INVALID, 'Command working directory does not exist.');
+      }
+      throw error;
+    });
     context.throwIfCancelled?.();
-    const cwdStat = await stat(resolvedCwd);
-    if (!cwdStat.isDirectory()) throw new Error('cwd must be a directory.');
+    const cwdStat = await stat(resolvedCwd).catch(error => { throw asFileError(error, { missing: ErrorCode.COMMAND_CWD_INVALID, notDirectory: ErrorCode.COMMAND_CWD_INVALID }); });
+    if (!cwdStat.isDirectory()) throw new AgentError(ErrorCode.COMMAND_CWD_INVALID, 'cwd must be a directory.');
     context.throwIfCancelled?.();
 
     context.eventBus?.emit('process.started', {

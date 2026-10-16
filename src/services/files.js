@@ -1,5 +1,6 @@
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { AgentError, ErrorCode, asFileError } from '../core/errors.js';
 import { resolveSafeNewFilePath, resolveSafePath } from '../security/path.js';
 import {
   MAX_TEXT_FILE_BYTES,
@@ -32,11 +33,11 @@ export function createFileServices({ root }) {
     async list_directory(input = {}, context = {}) {
       const target = await existingTarget(root, input, context);
       context.throwIfCancelled?.();
-      const targetStat = await stat(target);
-      if (!targetStat.isDirectory()) throw new Error('The requested path is not a directory.');
+      const targetStat = await stat(target).catch(error => { throw asFileError(error); });
+      if (!targetStat.isDirectory()) throw new AgentError(ErrorCode.NOT_DIRECTORY, 'The requested path is not a directory.');
       context.throwIfCancelled?.();
 
-      const dirents = await readdir(target, { withFileTypes: true });
+      const dirents = await readdir(target, { withFileTypes: true }).catch(error => { throw asFileError(error, { notDirectory: ErrorCode.NOT_DIRECTORY }); });
       context.throwIfCancelled?.();
       const limit = input.limit ?? 200;
       const entries = dirents.slice(0, limit).map((entry) => ({
@@ -59,7 +60,7 @@ export function createFileServices({ root }) {
     async read_file(input, context = {}) {
       const target = await existingTarget(root, input, context);
       context.throwIfCancelled?.();
-      const content = await readUtf8File(target);
+      const content = await readUtf8File(target).catch(error => { throw asFileError(error); });
       context.throwIfCancelled?.();
       const base = {
         path: displayPath(root, target),
@@ -87,7 +88,7 @@ export function createFileServices({ root }) {
     async write_file(input, context = {}) {
       const target = await newTarget(root, input, context);
       context.throwIfCancelled?.();
-      await createUtf8File(target, input.content, { beforeCommit: () => context.commitSideEffect?.() });
+      await createUtf8File(target, input.content, { beforeCommit: () => context.commitSideEffect?.() }).catch(error => { throw asFileError(error, { missing: ErrorCode.FILE_PARENT_NOT_FOUND, notDirectory: ErrorCode.FILE_PARENT_NOT_FOUND }); });
       context.eventBus?.emit('resource.accessed', { requestId: context.requestId, resourceType: 'file', operation: 'create', path: target });
       return {
         path: displayPath(root, target),
@@ -101,19 +102,19 @@ export function createFileServices({ root }) {
     async edit_file(input, context = {}) {
       const target = await existingTarget(root, input, context);
       context.throwIfCancelled?.();
-      const previousContent = await readUtf8File(target);
+      const previousContent = await readUtf8File(target).catch(error => { throw asFileError(error); });
       context.throwIfCancelled?.();
       let nextContent;
       switch (input.operation) {
         case 'overwrite': nextContent = input.content; break;
         case 'replace_lines': nextContent = replaceLines(previousContent, input.startLine, input.endLine, input.lines); break;
         case 'replace_characters': nextContent = replaceCharacters(previousContent, input.start, input.end, input.content); break;
-        default: throw new Error(`Unsupported edit operation: ${input.operation}`);
+        default: throw new AgentError(ErrorCode.INVALID_INPUT, `Unsupported edit operation: ${input.operation}`);
       }
       const changed = nextContent !== previousContent;
       if (changed) {
         context.throwIfCancelled?.();
-        await writeUtf8FileAtomic(target, nextContent, { beforeCommit: () => context.commitSideEffect?.() });
+        await writeUtf8FileAtomic(target, nextContent, { beforeCommit: () => context.commitSideEffect?.() }).catch(error => { throw asFileError(error); });
       }
       context.eventBus?.emit('resource.accessed', { requestId: context.requestId, resourceType: 'file', operation: 'write', path: target, changed });
       return {

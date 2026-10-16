@@ -3,6 +3,7 @@ import { access, open, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { randomUUID } from 'node:crypto';
+import { AgentError, ErrorCode } from '../core/errors.js';
 
 export const MAX_TEXT_FILE_BYTES = 1024 * 1024;
 
@@ -15,23 +16,23 @@ export async function readUtf8File(filePath) {
   const fileStat = await stat(filePath);
 
   if (!fileStat.isFile()) {
-    throw new Error('The requested path is not a regular file.');
+    throw new AgentError(ErrorCode.FILE_NOT_REGULAR, 'The requested path is not a regular file.');
   }
   if (fileStat.size > MAX_TEXT_FILE_BYTES) {
-    throw new Error(`File exceeds the ${MAX_TEXT_FILE_BYTES}-byte limit.`);
+    throw new AgentError(ErrorCode.FILE_TOO_LARGE, `File exceeds the ${MAX_TEXT_FILE_BYTES}-byte limit.`);
   }
 
   const handle = await open(filePath, 'r');
   try {
     const buffer = await handle.readFile();
     if (buffer.byteLength > MAX_TEXT_FILE_BYTES) {
-      throw new Error(`File exceeds the ${MAX_TEXT_FILE_BYTES}-byte limit.`);
+      throw new AgentError(ErrorCode.FILE_TOO_LARGE, `File exceeds the ${MAX_TEXT_FILE_BYTES}-byte limit.`);
     }
 
     try {
       return utf8Decoder.decode(buffer);
     } catch {
-      throw new Error('The requested file is not valid UTF-8 text.');
+      throw new AgentError(ErrorCode.INVALID_TEXT_FILE, 'The requested file is not valid UTF-8 text.');
     }
   } finally {
     await handle.close();
@@ -64,7 +65,7 @@ export function countTextLines(content) {
 
 function assertLineNumber(lines, line, label) {
   if (!Number.isInteger(line) || line < 1 || line > lines.length) {
-    throw new Error(`${label} must be between 1 and ${lines.length}.`);
+    throw new AgentError(ErrorCode.INVALID_INPUT, `${label} must be between 1 and ${lines.length}.`);
   }
 }
 
@@ -76,10 +77,10 @@ export function sliceTextLines(content, startLine = 1, endLine = undefined) {
 
   assertLineNumber(lines, firstLine, 'startLine');
   if (!Number.isInteger(requestedEndLine) || requestedEndLine < 1) {
-    throw new Error('endLine must be a positive integer.');
+    throw new AgentError(ErrorCode.INVALID_INPUT, 'endLine must be a positive integer.');
   }
   if (requestedEndLine < firstLine) {
-    throw new Error('endLine must be greater than or equal to startLine.');
+    throw new AgentError(ErrorCode.INVALID_INPUT, 'endLine must be greater than or equal to startLine.');
   }
 
   const lastLine = Math.min(requestedEndLine, lineCount);
@@ -102,10 +103,10 @@ export function replaceLines(content, startLine, endLine, replacementLines) {
   assertLineNumber(lines, endLine, 'endLine');
 
   if (endLine < startLine) {
-    throw new Error('endLine must be greater than or equal to startLine.');
+    throw new AgentError(ErrorCode.INVALID_INPUT, 'endLine must be greater than or equal to startLine.');
   }
   if (replacementLines.some((line) => /[\r\n]/.test(line))) {
-    throw new Error('Each replacement line must not contain newline characters.');
+    throw new AgentError(ErrorCode.INVALID_INPUT, 'Each replacement line must not contain newline characters.');
   }
 
   const first = lines[startLine - 1];
@@ -130,7 +131,7 @@ function characterOffset(content, position, label) {
   const maxColumn = characters.length + 1;
 
   if (position.column < 1 || position.column > maxColumn) {
-    throw new Error(`${label}.column must be between 1 and ${maxColumn}.`);
+    throw new AgentError(ErrorCode.INVALID_INPUT, `${label}.column must be between 1 and ${maxColumn}.`);
   }
 
   return selectedLine.start + characters.slice(0, position.column - 1).join('').length;
@@ -141,7 +142,7 @@ export function replaceCharacters(content, start, end, replacement) {
   const endOffset = characterOffset(content, end, 'end');
 
   if (endOffset < startOffset) {
-    throw new Error('The end position must not come before the start position.');
+    throw new AgentError(ErrorCode.INVALID_INPUT, 'The end position must not come before the start position.');
   }
 
   return content.slice(0, startOffset) + replacement + content.slice(endOffset);
@@ -150,7 +151,7 @@ export function replaceCharacters(content, start, end, replacement) {
 export async function createUtf8File(filePath, content, { beforeCommit } = {}) {
   const byteLength = Buffer.byteLength(content, 'utf8');
   if (byteLength > MAX_TEXT_FILE_BYTES) {
-    throw new Error(`File exceeds the ${MAX_TEXT_FILE_BYTES}-byte limit.`);
+    throw new AgentError(ErrorCode.FILE_TOO_LARGE, `File exceeds the ${MAX_TEXT_FILE_BYTES}-byte limit.`);
   }
 
   let handle;
@@ -161,7 +162,7 @@ export async function createUtf8File(filePath, content, { beforeCommit } = {}) {
     await handle.sync();
   } catch (error) {
     if (error && typeof error === 'object' && error.code === 'EEXIST') {
-      throw new Error('File already exists.');
+      throw new AgentError(ErrorCode.FILE_EXISTS, 'File already exists.');
     }
     throw error;
   } finally {
@@ -174,12 +175,12 @@ export async function createUtf8File(filePath, content, { beforeCommit } = {}) {
 export async function writeUtf8FileAtomic(filePath, content, { beforeCommit } = {}) {
   const byteLength = Buffer.byteLength(content, 'utf8');
   if (byteLength > MAX_TEXT_FILE_BYTES) {
-    throw new Error(`Edited file exceeds the ${MAX_TEXT_FILE_BYTES}-byte limit.`);
+    throw new AgentError(ErrorCode.FILE_TOO_LARGE, `Edited file exceeds the ${MAX_TEXT_FILE_BYTES}-byte limit.`);
   }
 
   const originalStat = await stat(filePath);
   if (!originalStat.isFile()) {
-    throw new Error('The requested path is not a regular file.');
+    throw new AgentError(ErrorCode.FILE_NOT_REGULAR, 'The requested path is not a regular file.');
   }
   await access(filePath, constants.W_OK);
 

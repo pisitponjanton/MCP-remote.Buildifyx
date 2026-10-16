@@ -6,11 +6,15 @@ export const ErrorCode = Object.freeze({
   PATH_OUTSIDE_ROOT: 'PATH_OUTSIDE_ROOT',
   GIT_INTERNAL_PATH: 'GIT_INTERNAL_PATH',
   FILE_NOT_FOUND: 'FILE_NOT_FOUND',
+  FILE_PARENT_NOT_FOUND: 'FILE_PARENT_NOT_FOUND',
+  NOT_DIRECTORY: 'NOT_DIRECTORY',
   FILE_NOT_REGULAR: 'FILE_NOT_REGULAR',
   FILE_TOO_LARGE: 'FILE_TOO_LARGE',
   INVALID_TEXT_FILE: 'INVALID_TEXT_FILE',
   FILE_EXISTS: 'FILE_EXISTS',
   COMMAND_NOT_ALLOWED: 'COMMAND_NOT_ALLOWED',
+  COMMAND_NOT_FOUND: 'COMMAND_NOT_FOUND',
+  COMMAND_CWD_INVALID: 'COMMAND_CWD_INVALID',
   COMMAND_TIMEOUT: 'COMMAND_TIMEOUT',
   INVALID_INPUT: 'INVALID_INPUT',
   PLAN_INVALID: 'PLAN_INVALID',
@@ -29,6 +33,16 @@ export class AgentError extends Error {
     this.code = code;
     if (details !== undefined) this.details = details;
   }
+}
+
+// Map only known filesystem failures. Unknown failures must remain INTERNAL_ERROR.
+export function asFileError(error, { missing = ErrorCode.FILE_NOT_FOUND, notDirectory = ErrorCode.INVALID_INPUT } = {}) {
+  if (isAgentError(error)) return error;
+  const code = error?.code === 'ENOENT' ? missing
+    : error?.code === 'ENOTDIR' ? notDirectory
+      : error?.code === 'EEXIST' ? ErrorCode.FILE_EXISTS
+        : ['EACCES', 'EPERM'].includes(error?.code) ? ErrorCode.PERMISSION_DENIED : null;
+  return code ? new AgentError(code, error.message) : error;
 }
 
 export function isAgentError(error) {
@@ -68,6 +82,41 @@ export function normalizeToolError(error) {
     error instanceof Error ? error.message : String(error));
 }
 
+// Stable public messages; never interpolate raw Error.message from the OS.
+const PUBLIC_TOOL_MESSAGES = Object.freeze({
+  [ErrorCode.PERMISSION_DENIED]: 'Permission denied by local policy or by the user.',
+  [ErrorCode.CONFIRMATION_REQUIRED]: 'Local approval is required for this tool.',
+  [ErrorCode.REQUEST_CANCELLED]: 'Tool request was cancelled or timed out before completion.',
+  INSTANCE_CONTROL_ABORTED: 'Tool request was cancelled or timed out before completion.',
+  MEDIA_TIMEOUT: 'Tool transport or media request timed out.',
+  INSTANCE_CONTROL_TIMEOUT: 'Tool transport or media request timed out.',
+  [ErrorCode.INTERNAL_ERROR]: 'Tool failed unexpectedly. Check local diagnostics.',
+  [ErrorCode.INVALID_INPUT]: 'Invalid tool input.',
+  [ErrorCode.TOOL_NOT_FOUND]: 'Unknown tool.',
+  [ErrorCode.FILE_NOT_FOUND]: 'File or directory not found in the selected workspace.',
+  [ErrorCode.FILE_PARENT_NOT_FOUND]: 'Destination parent directory does not exist.',
+  [ErrorCode.NOT_DIRECTORY]: 'Path is not a directory.',
+  [ErrorCode.FILE_NOT_REGULAR]: 'Path is not a regular file.',
+  [ErrorCode.FILE_TOO_LARGE]: 'Text file exceeds the allowed size.',
+  [ErrorCode.INVALID_TEXT_FILE]: 'File does not contain valid UTF-8 text.',
+  [ErrorCode.FILE_EXISTS]: 'File already exists; overwriting is not allowed.',
+  [ErrorCode.COMMAND_NOT_FOUND]: 'Command executable was not found.',
+  [ErrorCode.COMMAND_CWD_INVALID]: 'Command working directory does not exist or is not a directory.',
+  [ErrorCode.PATH_OUTSIDE_ROOT]: 'Path is outside the authorized workspace root.',
+  [ErrorCode.GIT_INTERNAL_PATH]: 'Access to Git internals is not allowed.',
+  IMAGE_NOT_FOUND: 'Image file not found in the selected workspace.',
+  IMAGE_EXISTS: 'Destination file already exists. Choose a new filename; images are never overwritten.',
+  IMAGE_PATH_DENIED: 'Image path is not authorized. Choose a location inside an approved workspace root.',
+  IMAGE_PATH_CHANGED: 'Image destination path changed during validation. Check the folder and try again.',
+  MEDIA_IMPORT_PERMISSION_REQUIRED: 'Image import requires local imageRead and cacheManage permissions set to Allow.',
+  CACHE_NOT_FOUND: 'Temporary image was not found or has expired. Import the image again.',
+  BROWSER_INVALID_TARGET: 'Browser selector is invalid. Use a valid selector, role or exact text.',
+  BROWSER_AMBIGUOUS_TARGET: 'Browser target matches multiple elements. Use a unique selector.',
+  BROWSER_TARGET_NOT_FOUND: 'Browser target was not found or is not visible.',
+  BROWSER_TARGET_NOT_EDITABLE: 'Browser target is not an enabled, editable text input or textarea.',
+  BROWSER_SENSITIVE_ACTION: 'Browser action is sensitive or restricted. Use explicit confirmation where supported.'
+});
+
 // Public tool results must not contain arbitrary paths, URLs, tokens, browser
 // form values, stack traces or details supplied by a failed dependency.
 // Return actionable stable codes; local event logs can retain internal context.
@@ -76,33 +125,7 @@ export function publicToolError(error) {
   const rawCode = normalized.code;
   const code = typeof rawCode === 'string' && (TOOL_ERROR_CODES.has(rawCode) || domainCode.test(rawCode))
     ? rawCode : ErrorCode.INTERNAL_ERROR;
-  const message = code === ErrorCode.PERMISSION_DENIED
-    ? 'Permission denied by local policy or by the user.'
-    : code === ErrorCode.CONFIRMATION_REQUIRED
-      ? 'Local approval is required for this tool.'
-      : code === ErrorCode.REQUEST_CANCELLED || code === 'INSTANCE_CONTROL_ABORTED'
-        ? 'Tool request was cancelled or timed out before completion.'
-        : code === 'MEDIA_TIMEOUT' || code === 'INSTANCE_CONTROL_TIMEOUT'
-          ? 'Tool transport or media request timed out.'
-          : code === ErrorCode.INTERNAL_ERROR
-            ? 'Tool failed unexpectedly. Check local diagnostics.'
-            : code === ErrorCode.INVALID_INPUT
-              ? 'Invalid tool input.'
-              : code === ErrorCode.TOOL_NOT_FOUND
-                ? 'Unknown tool.'
-                : code === 'IMAGE_EXISTS'
-                  ? 'Destination file already exists. Choose a new filename; images are never overwritten.'
-                  : code === 'IMAGE_PATH_DENIED'
-                    ? 'Image path is not authorized. Choose a location inside an approved workspace root.'
-                    : code === 'IMAGE_PATH_CHANGED'
-                      ? 'Image destination path changed during validation. Check the folder and try again.'
-                      : code === 'MEDIA_IMPORT_PERMISSION_REQUIRED'
-                        ? 'Image import requires local imageRead and cacheManage permissions set to Allow.'
-                        : code === 'CACHE_NOT_FOUND'
-                          ? 'Temporary image was not found or has expired. Import the image again.'
-                          : domainCode.test(code)
-                            ? `Tool failed with ${code}.`
-                            : `Tool failed with ${code}.`;
+  const message = PUBLIC_TOOL_MESSAGES[code] ?? `Tool failed with ${code}.`;
   const details = normalized.details;
   const safeDetails = {};
   if ([ErrorCode.PERMISSION_DENIED, ErrorCode.CONFIRMATION_REQUIRED].includes(code) && details) {

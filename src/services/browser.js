@@ -179,12 +179,26 @@ export function createBrowserControlServices({ createEngine, instanceId, princip
   }
   async function targetFor(page, target, timeoutMs = 10000) {
     const locator = locatorFor(page, target);
+    // Playwright waitFor is strict: two matching elements can throw before
+    // our previous count check, incorrectly reporting TARGET_NOT_FOUND.
+    const countMatches = async () => {
+      try { return await locator.count(); }
+      catch (error) {
+        if (error instanceof AgentError) throw error;
+        throw fault('BROWSER_INVALID_TARGET', 'Browser target selector is invalid.');
+      }
+    };
+    if (await countMatches() > 1)
+      throw fault('BROWSER_AMBIGUOUS_TARGET', 'Target must match exactly one element.');
     try { await locator.waitFor({ state: 'visible', timeout: timeoutMs }); }
     catch (error) {
       if (error instanceof AgentError) throw error;
+      if (await countMatches() > 1)
+        throw fault('BROWSER_AMBIGUOUS_TARGET', 'Target must match exactly one element.');
       throw fault('BROWSER_TARGET_NOT_FOUND', 'Browser target was not visible.');
     }
-    if (await locator.count() !== 1) throw fault('BROWSER_AMBIGUOUS_TARGET', 'Target must match exactly one element.');
+    if (await countMatches() !== 1)
+      throw fault('BROWSER_TARGET_NOT_FOUND', 'Browser target was not visible.');
     const meta = await locator.evaluate(el => {
       const form = el.closest('form');
       const a = el.closest('a');
@@ -195,7 +209,8 @@ export function createBrowserControlServices({ createEngine, instanceId, princip
         href: a?.href ?? null, download: Boolean(a?.hasAttribute('download')),
         form: Boolean(form), formMethod: form?.method ?? null,
         inputType: (input?.getAttribute('type') ?? '').toLowerCase(),
-        contentEditable: el.isContentEditable, readonly: Boolean(el.hasAttribute('readonly'))
+        contentEditable: el.isContentEditable, readonly: Boolean(el.hasAttribute('readonly')),
+        disabled: el.matches(':disabled')
       };
     });
     return { locator, meta };
@@ -207,7 +222,7 @@ export function createBrowserControlServices({ createEngine, instanceId, princip
     if (!approved && (meta.form || meta.type === 'submit' || meta.type === 'password'
       || meta.inputType === 'password'
       || /\b(delete|remove|purchase|pay|checkout|send|submit|confirm|sign out|logout)\b/i.test(meta.name))) {
-      throw fault('BROWSER_SENSITIVE_ACTION', 'Sensitive browser interaction requires Phase 8 approval support.');
+      throw fault('BROWSER_SENSITIVE_ACTION', 'Sensitive browser interaction requires explicit browserSensitive approval.');
     }
     if (meta.href) {
       let target;
@@ -246,9 +261,12 @@ export function createBrowserControlServices({ createEngine, instanceId, princip
       const { locator, meta } = await targetFor(page, target, timeoutMs);
       const sensitive = meta.type === 'password' || meta.inputType === 'password';
       const explicitSensitive = confirmSensitive === true && context.sensitiveApproved === true;
-      if (!['input', 'textarea'].includes(meta.tag) || ['file','hidden','submit','button'].includes(meta.type)
-        || meta.readonly || (sensitive && (!confirmSensitive || !context.sensitiveApproved))) {
-        throw fault('BROWSER_SENSITIVE_ACTION', 'Only normal text inputs and textareas may be filled.');
+      if (sensitive && (!confirmSensitive || !context.sensitiveApproved))
+        throw fault('BROWSER_SENSITIVE_ACTION', 'Password fields require explicit browserSensitive approval.');
+      const textInputTypes = new Set(['', 'text', 'search', 'email', 'url', 'tel', 'number', 'password']);
+      if (!['input', 'textarea'].includes(meta.tag) || (meta.tag === 'input' && !textInputTypes.has(meta.type))
+        || meta.readonly || meta.disabled) {
+        throw fault('BROWSER_TARGET_NOT_EDITABLE', 'Target must be an enabled, editable text input or textarea.');
       }
       ensureAccess(context, sensitive ? 'browserSensitive' : 'browserInteract');
       context.commitSideEffect?.();

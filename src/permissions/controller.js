@@ -37,6 +37,16 @@ export function createPermissionController({ root, policyManager, approvalQueue,
       const info = await classifyPath({
         root, additionalRoots: policy.additionalRoots,
         userPath: requested.value, newFile: requested.newFile
+      }).catch(error => {
+        if (error?.code === ErrorCode.FILE_NOT_FOUND) {
+          if (toolName === 'run_command') {
+            throw new AgentError(ErrorCode.COMMAND_CWD_INVALID, 'Command working directory does not exist.');
+          }
+          if (['read_image', 'get_image_info', 'resize_image', 'save_image'].includes(toolName)) {
+            throw new AgentError('IMAGE_NOT_FOUND', 'Image source does not exist.');
+          }
+        }
+        throw error;
       });
       pathInfos[requested.key] = info;
       if (!pathInfo) pathInfo = info;

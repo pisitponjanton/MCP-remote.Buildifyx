@@ -1,6 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { buildifyxHome } from '../utils/home.js';
+import { AgentError, ErrorCode, asFileError } from '../core/errors.js';
 
 export function isInsideRoot(root, target) {
   const relative = path.relative(root, target);
@@ -18,10 +19,10 @@ export function isBuildifyxInternalPath(target, baseDirectory = buildifyxHome())
 
 function assertNotProtectedPath(root, target) {
   if (isGitInternalPath(root, target)) {
-    throw new Error('Access to .git internals is not allowed.');
+    throw new AgentError(ErrorCode.GIT_INTERNAL_PATH, 'Access to .git internals is not allowed.');
   }
   if (isBuildifyxInternalPath(target)) {
-    throw new Error('Access to Buildifyx internal state is not allowed through MCP tools.');
+    throw new AgentError(ErrorCode.PERMISSION_DENIED, 'Access to Buildifyx internal state is not allowed through MCP tools.');
   }
 }
 
@@ -29,16 +30,16 @@ export async function resolveSafePath(root, userPath = '.') {
   const requested = path.resolve(root, userPath);
 
   if (!isInsideRoot(root, requested)) {
-    throw new Error('Path is outside the allowed root directory.');
+    throw new AgentError(ErrorCode.PATH_OUTSIDE_ROOT, 'Path is outside the allowed root directory.');
   }
 
   assertNotProtectedPath(root, requested);
 
   // Resolve symlinks as well, so a symlink inside root cannot escape root or
   // point into Buildifyx internal state.
-  const canonical = await realpath(requested);
+  const canonical = await realpath(requested).catch(error => { throw asFileError(error, { notDirectory: ErrorCode.FILE_NOT_FOUND }); });
   if (!isInsideRoot(root, canonical)) {
-    throw new Error('Resolved path is outside the allowed root directory.');
+    throw new AgentError(ErrorCode.PATH_OUTSIDE_ROOT, 'Resolved path is outside the allowed root directory.');
   }
 
   assertNotProtectedPath(root, canonical);
@@ -49,16 +50,16 @@ export async function resolveSafeNewFilePath(root, userPath) {
   const requested = path.resolve(root, userPath);
 
   if (!isInsideRoot(root, requested)) {
-    throw new Error('Path is outside the allowed root directory.');
+    throw new AgentError(ErrorCode.PATH_OUTSIDE_ROOT, 'Path is outside the allowed root directory.');
   }
 
   assertNotProtectedPath(root, requested);
 
   const requestedParent = path.dirname(requested);
-  const canonicalParent = await realpath(requestedParent);
+  const canonicalParent = await realpath(requestedParent).catch(error => { throw asFileError(error, { missing: ErrorCode.FILE_PARENT_NOT_FOUND, notDirectory: ErrorCode.FILE_PARENT_NOT_FOUND }); });
 
   if (!isInsideRoot(root, canonicalParent)) {
-    throw new Error('Resolved parent path is outside the allowed root directory.');
+    throw new AgentError(ErrorCode.PATH_OUTSIDE_ROOT, 'Resolved parent path is outside the allowed root directory.');
   }
 
   assertNotProtectedPath(root, canonicalParent);

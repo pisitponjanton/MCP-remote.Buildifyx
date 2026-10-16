@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { createRequire } from 'node:module';
 import { lstat, open, realpath, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { AgentError } from '../core/errors.js';
+import { AgentError, ErrorCode, asFileError } from '../core/errors.js';
 import { createArtifactCache } from '../cache/store.js';
 import { classifyPath } from '../security/scope.js';
 
@@ -25,6 +25,12 @@ function problem(code, message) { return new AgentError(code, message); }
 const READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
 const NEW_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0);
 const formats = { jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+function imagePathError(error) {
+  if (['ENOENT', 'ENOTDIR', ErrorCode.FILE_NOT_FOUND].includes(error?.code)) {
+    return problem('IMAGE_NOT_FOUND', 'Image source was not found.');
+  }
+  return asFileError(error);
+}
 
 export function detectImageMime(data) {
   if (!Buffer.isBuffer(data) || data.length < 12) throw problem('IMAGE_INVALID', 'Invalid image content.');
@@ -58,10 +64,10 @@ async function inspectImage(data, { decode = true } = {}) {
 }
 
 async function readBoundedFile(filename) {
-  const before = await lstat(filename);
+  const before = await lstat(filename).catch(error => { throw imagePathError(error); });
   if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) throw problem('IMAGE_INVALID_PATH', 'Image must be a regular file.');
   if (before.size <= 0 || before.size > MAX_IMAGE_BYTES) throw problem('IMAGE_TOO_LARGE', 'Image exceeds allowed size.');
-  const fd = await open(filename, READ_FLAGS);
+  const fd = await open(filename, READ_FLAGS).catch(error => { throw imagePathError(error); });
   try {
     const actual = await fd.stat();
     if (!actual.isFile() || actual.nlink !== 1 || actual.dev !== before.dev || actual.ino !== before.ino || actual.size !== before.size) {
@@ -76,7 +82,7 @@ async function readBoundedFile(filename) {
 async function validatedPath(root, userPath, context, key, newFile = false) {
   const approved = context[key];
   const policyRoots = approved?.matchedRoot ? [approved.matchedRoot] : [];
-  const classified = await classifyPath({ root, additionalRoots: policyRoots, userPath, newFile });
+  const classified = await classifyPath({ root, additionalRoots: policyRoots, userPath, newFile }).catch(error => { throw imagePathError(error); });
   if (classified.scope === 'outside' && approved?.scope !== 'outside') {
     throw problem('IMAGE_PATH_DENIED', 'Destination or source is not authorized.');
   }

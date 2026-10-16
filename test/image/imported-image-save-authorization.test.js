@@ -7,6 +7,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 import { createRuntime } from '../../src/core/runtime.js';
+import { AgentError, publicToolError } from '../../src/core/errors.js';
 import { normalizePolicy } from '../../src/permissions/policy.js';
 
 const sharp = createRequire(import.meta.url)('sharp');
@@ -143,4 +144,20 @@ test('Phase 3: reject invalid artifact IDs before permanent save via validated M
     artifactId: '../outside.png', destinationPath: 'x.png'
   }), { code: 'INVALID_INPUT' });
   assert.deepEqual(await readdir(f.root), []);
+});
+
+test('Phase 3: image save failures provide actionable safe client errors without disclosing internal paths', () => {
+  const checks = [
+    ['IMAGE_EXISTS', /Choose a new filename/],
+    ['IMAGE_PATH_DENIED', /approved workspace root/],
+    ['IMAGE_PATH_CHANGED', /try again/],
+    ['MEDIA_IMPORT_PERMISSION_REQUIRED', /imageRead and cacheManage/],
+    ['CACHE_NOT_FOUND', /Import the image again/]
+  ];
+  for (const [code, expected] of checks) {
+    const result = publicToolError(new AgentError(code, 'SECRET_USER_PATH_OR_TOKEN'));
+    assert.equal(result.code, code);
+    assert.match(result.message, expected);
+    assert.equal(JSON.stringify(result).includes('SECRET_USER_PATH_OR_TOKEN'), false);
+  }
 });

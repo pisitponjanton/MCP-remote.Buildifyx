@@ -13,7 +13,7 @@ async function mockBrowser({ goto = async () => null, snapshot = async () => ({}
   const locator = {
     waitFor: locatorWait,
     count: async () => 1,
-    evaluate: async () => ({ tag: targetType, type: targetType, inputType: '',
+    evaluate: async () => ({ tag: targetType, type: targetType === 'input' ? 'text' : targetType, inputType: '',
       readonly: false, form: false, name: '', download: false, href: null }),
     click, fill
   };
