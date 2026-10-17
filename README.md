@@ -316,15 +316,16 @@ Background instances can opt into autostart from the web console. bdxa stores on
 The local agent remains the final permission authority. Available profiles are:
 
 ```text
-Auto
-Read only
-Allow all
+Auto (base 5)
+Read-only (base 5)
+Allow base 5
+Allow All (16)
 Custom
 ```
 
-The default Auto profile permits normal reads, writes, and approved developer commands while asking for dangerous operations or access outside allowed roots.
+The default Auto profile permits normal reads, writes, and approved developer commands while asking for dangerous operations or access outside allowed roots. In the terminal dashboard, press `P` for Permissions, then `X` to opt in to **Allow All (16)** for that single workspace; `A`, `O`, and `F` still modify only the five legacy categories. Individual permissions remain editable.
 
-`Allow all` skips local ASK prompts for configured tools, dangerous actions, and outside-workspace access. It is not an operating-system sandbox.
+`Allow All (16)` grants the five base categories plus all eleven image, cache, and browser categories without local ASK prompts. It is powerful, does not replace explicit consent fields required by certain tools, and is **not** an operating-system sandbox. Use it only for workspaces and MCP clients you trust.
 
 ### Approvals
 

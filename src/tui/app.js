@@ -142,7 +142,7 @@ function Controls({ screen, inputMode, compact, attached = false, canBackground 
   else if (backgroundConfirm) lines = ['Enter Confirm background   Q Back   Ctrl+C Stop'];
   else if (inputMode) lines = [`Enter Save   Q on empty input Back   ${exitLabel}`];
   else if (screen === 'permissions') lines = [
-    '↑↓ Move  ←→ Change  Space Cycle  A/O/F Base presets',
+    '↑↓ Move  ←→ Change  Space Cycle  A/O/F Base 5  X Allow All',
     `R Roots  C Rules  Q Back  ${exitLabel}`
   ];
   else if (screen === 'roots') lines = [`↑↓ Select   A Add root   D Delete root   Q Back   ${exitLabel}`];
@@ -177,11 +177,11 @@ function PermissionsScreen({ policy, selected, layout }) {
     ),
     h(Text, { dimColor: true, wrap: 'truncate-end' },
       `${viewport.group} · ${viewport.selected + 1}/16 ${viewport.above ? '↑' : ''}${viewport.below ? '↓' : ''}`),
-    h(Text, { dimColor: true, wrap: 'truncate-end' }, `Base 5 preset: ${PROFILES[detectProfile(policy)].label}`),
+    h(Text, { dimColor: true, wrap: 'truncate-end' }, `Active preset: ${PROFILES[detectProfile(policy)].label}`),
     h(Text, { dimColor: true, wrap: 'truncate-end' },
       `Extra 11 independent: ${extras.allow} Allow · ${extras.ask} Ask · ${extras.deny} Deny`),
     h(Text, { dimColor: true, wrap: 'truncate-end' },
-      `A/O/F change base 5 only. Roots: ${policy.additionalRoots.length} · Rules: ${policy.commandRules.length}`)
+      `A/O/F base 5 · X allows all 16. Roots: ${policy.additionalRoots.length} · Rules: ${policy.commandRules.length}`)
   );
 }
 
@@ -262,7 +262,8 @@ function HelpScreen({ attached = false, canBackground = false }) {
     h(Text, null, '  C        Command rules'),
     h(Text, null, '  T        Diagnostics and MCP tools'),
     h(Text, null, '  Permissions: ↑↓ select; ←→ / Space change Allow, Ask, Deny'),
-    h(Text, null, '  A/O/F presets change only the 5 base categories, not Image/Cache/Browser'),
+    h(Text, null, '  A/O/F presets change only the 5 base categories'),
+    h(Text, null, '  X        Allow All 16 (including Image/Cache/Browser, per workspace)'),
     h(Text, null, ''),
     h(Text, { bold: true }, 'Approvals'),
     h(Text, null, '  ↑↓       Select decision'),
@@ -483,6 +484,10 @@ export function App({ eventBus, approvalQueue, policyManager, version, updateSta
       } else if (input === 'a' || input === 'A') await applyProfile(policyManager, 'auto');
       else if (input === 'o' || input === 'O') await applyProfile(policyManager, 'readOnly');
       else if (input === 'f' || input === 'F') await applyProfile(policyManager, 'fullAccess');
+       else if (input === 'x' || input === 'X') {
+         await applyProfile(policyManager, 'allowAll');
+         setMessage('Allow All enabled for all 16 categories on this workspace.');
+       }
       else if (input === 'r' || input === 'R') setScreen('roots');
       else if (input === 'c' || input === 'C') setScreen('commands');
       return;

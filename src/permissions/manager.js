@@ -63,6 +63,12 @@ export function createPolicyManager(initialPolicy, { filePath } = {}) {
         categories: { ...current.categories, [category]: action }
       }), options);
     },
+    async setCategories(categories, options = {}) {
+      return mutate((current) => normalizePolicy({
+        ...current,
+        categories: { ...current.categories, ...categories }
+      }), options);
+    },
     async addCommandRule(rule) {
       const normalized = {
         executable: rule.executable,

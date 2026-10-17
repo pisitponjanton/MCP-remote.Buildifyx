@@ -1,4 +1,6 @@
-export const PROFILE_ORDER = ['auto', 'readOnly', 'fullAccess', 'custom'];
+import { DEFAULT_POLICY } from '../permissions/policy.js';
+
+export const PROFILE_ORDER = ['auto', 'readOnly', 'fullAccess', 'allowAll', 'custom'];
 
 export const PROFILES = Object.freeze({
   auto: {
@@ -16,28 +18,37 @@ export const PROFILES = Object.freeze({
     description: 'Allow all five base categories only; does not automatically allow image, cache or browser access.',
     categories: { read: 'allow', write: 'allow', command: 'allow', dangerous: 'allow', outsideRoot: 'allow' }
   },
+  allowAll: {
+    label: 'Allow All (16)',
+    description: 'Explicitly allow all 16 permission categories, including image, cache and browser operations.',
+    categories: Object.fromEntries(Object.keys(DEFAULT_POLICY.categories).map((key) => [key, 'allow']))
+  },
   custom: {
-    label: 'Custom (base 5)',
-    description: 'Base categories differ from presets; all 16 permissions remain individually editable.',
+    label: 'Custom',
+    description: 'Permission categories differ from presets; all 16 permissions remain individually editable.',
     categories: null
   }
 });
 
 export function detectProfile(policy) {
-  for (const key of ['auto', 'readOnly', 'fullAccess']) {
+  // Check all 16 before base-only presets; otherwise Allow All looks like Allow base 5.
+  for (const key of ['allowAll', 'auto', 'readOnly', 'fullAccess']) {
     const expected = PROFILES[key].categories;
     if (Object.entries(expected).every(([name, value]) => policy.categories[name] === value)) return key;
   }
   return 'custom';
 }
 
-// Base presets intentionally never touch the 11 Image/Cache/Browser categories.
-// Keep this operation explicit and per-instance; advanced ASK/DENY decisions
-// must not become ALLOW merely because a legacy preset was selected.
+// Base presets intentionally leave the 11 Image/Cache/Browser categories unchanged.
+// Only the explicit allowAll preset grants all 16 categories, per instance.
 export async function applyProfile(policyManager, profileKey) {
   const profile = PROFILES[profileKey];
   if (!profile?.categories) return;
-  for (const [category, action] of Object.entries(profile.categories)) {
-    await policyManager.setCategory(category, action);
+  if (typeof policyManager.setCategories === 'function') {
+    await policyManager.setCategories(profile.categories);
+  } else {
+    for (const [category, action] of Object.entries(profile.categories)) {
+      await policyManager.setCategory(category, action);
+    }
   }
 }
