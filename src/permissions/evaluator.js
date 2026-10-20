@@ -59,10 +59,13 @@ function startsWithArgs(args, prefix = []) {
   return prefix.every((value, index) => args[index] === value);
 }
 
-export function matchCommandRule(policy, command, args = []) {
+export function matchCommandRule(policy, command, args = [], cwd) {
   const matches = policy.commandRules
     .map((rule, index) => ({ rule, index }))
-    .filter(({ rule }) => rule.executable === command && startsWithArgs(args, rule.argsPrefix ?? []));
+    .filter(({ rule }) => rule.executable === command
+      && startsWithArgs(args, rule.argsPrefix ?? [])
+      && (!rule.exact || (rule.argsPrefix?.length ?? 0) === args.length)
+      && (!rule.cwd || rule.cwd === cwd));
 
   if (!matches.length) return undefined;
 
@@ -70,7 +73,8 @@ export function matchCommandRule(policy, command, args = []) {
   // specific, prefer the latest one so a newer user choice wins predictably.
   matches.sort((left, right) => {
     const specificity = (right.rule.argsPrefix?.length ?? 0) - (left.rule.argsPrefix?.length ?? 0);
-    return specificity !== 0 ? specificity : right.index - left.index;
+    return specificity || Number(Boolean(right.rule.cwd)) - Number(Boolean(left.rule.cwd))
+      || Number(Boolean(right.rule.exact)) - Number(Boolean(left.rule.exact)) || right.index - left.index;
   });
 
   return matches[0].rule;
@@ -96,6 +100,7 @@ function hasDangerousGitOption(args) {
 }
 
 function gitNeedsApproval(args) {
+  if (args.length === 1 && ['--version', 'version'].includes(args[0])) return false;
   const subcommand = args[0] ?? '';
   if (!subcommand || hasDangerousGitOption(args)) return true;
   if (!SAFE_GIT_COMMANDS.has(subcommand)) {
@@ -109,17 +114,53 @@ function gitNeedsApproval(args) {
   return false;
 }
 
+// These classes explain consent, not an OS sandbox or a proof that a binary
+// installed on the host is trustworthy. Keep unknown argv shapes behind consent.
+export function classifyCommand(command, args = []) {
+  if (DANGEROUS_COMMANDS.has(command)) return {
+    operationClass: 'destructive', requiresApproval: true,
+    reason: 'This command can delete data or control host processes.'
+  };
+  if (command === 'rg' && args.length === 1 && ['--files', '--version'].includes(args[0])) return {
+    operationClass: 'workspace-read', requiresApproval: false, requiresRead: true,
+    reason: 'Read-only ripgrep operation; configuration loading is disabled.',
+    executionArgs: ['--no-config', ...args]
+  };
+  if (command === 'git') return {
+    operationClass: gitNeedsApproval(args) ? 'repository-change' : 'developer-query',
+    requiresApproval: gitNeedsApproval(args),
+    reason: gitNeedsApproval(args)
+      ? 'This Git operation can change repository state, access other paths or invoke helpers.'
+      : 'Developer query allowed by command policy.'
+  };
+  if (PACKAGE_MANAGERS.has(command)) {
+    const install = ['install', 'i', 'add', 'ci', 'update', 'upgrade', 'rebuild'].includes(args[0])
+      || (command !== 'npm' && args.length === 0);
+    return {
+      operationClass: install ? 'dependency-install'
+        : packageManagerNeedsApproval(command, args) ? 'code-execution' : 'developer-query',
+      requiresApproval: packageManagerNeedsApproval(command, args),
+      reason: install
+        ? 'Installs or changes dependencies and may execute package scripts on this computer. Approve this invocation or remember its exact arguments in this directory.'
+        : packageManagerNeedsApproval(command, args)
+          ? 'This package-manager operation can execute project code or change configuration on this computer.'
+          : 'Developer query allowed by command policy.'
+    };
+  }
+  return {
+    operationClass: 'unclassified', requiresApproval: true,
+    reason: 'This executable or argument pattern is not classified. Approve this invocation or add a scoped exact command rule; Full Access is not required.'
+  };
+}
+
 export function isDangerousCommand(command, args = []) {
-  if (DANGEROUS_COMMANDS.has(command)) return true;
-  if (command === 'git' && gitNeedsApproval(args)) return true;
-  if (packageManagerNeedsApproval(command, args)) return true;
-  return false;
+  return classifyCommand(command, args).requiresApproval;
 }
 
 export function getRequestedPaths(toolName, input = {}) {
   const all = [];
   if (FILE_TOOLS.has(toolName) && typeof input.path === 'string') all.push({ key: 'path', value: input.path, newFile: toolName === 'write_file' });
-  if (toolName === 'run_command' && typeof input.cwd === 'string') all.push({ key: 'cwd', value: input.cwd, newFile: false });
+  if (toolName === 'run_command') all.push({ key: 'cwd', value: input.cwd ?? '.', newFile: false });
   if (['read_image', 'get_image_info', 'resize_image', 'save_image'].includes(toolName) && typeof input.path === 'string') all.push({ key: 'sourcePath', value: input.path, newFile: false });
   if (['save_image', 'save_cached_image'].includes(toolName) && typeof input.destinationPath === 'string') all.push({ key: 'destinationPath', value: input.destinationPath, newFile: true });
   return all;
@@ -144,30 +185,35 @@ export function evaluateOutsideRoot(policy) {
   };
 }
 
-export function evaluateRequest({ toolName, input = {}, policy }) {
+export function evaluateRequest({ toolName, input = {}, policy, unrestrictedCommands = false }) {
   const category = toolName === 'browser_tabs' && ['new', 'close'].includes(input.action)
     ? 'browserInteract' : TOOL_CATEGORY[toolName];
   if (!category) return { decision: Decision.DENY, category: 'unknown', reason: 'Unknown tool' };
 
   if (toolName === 'run_command') {
     const args = input.args ?? [];
-    const rule = matchCommandRule(policy, input.command, args);
-    const dangerous = isDangerousCommand(input.command, args);
+    const classification = classifyCommand(input.command, args);
+    const dangerous = classification.requiresApproval
+      && !(unrestrictedCommands && classification.operationClass === 'unclassified');
+    const requirements = [
+      { category: 'command', decision: policy.categories.command ?? Decision.DENY },
+      ...(classification.requiresRead ? [{ category: 'read', decision: policy.categories.read ?? Decision.DENY }] : []),
+      ...(classification.operationClass === 'dependency-install' ? [{ category: 'write', decision: policy.categories.write ?? Decision.DENY }] : []),
+      ...(dangerous ? [{ category: 'dangerous', decision: policy.categories.dangerous ?? Decision.ASK }] : [])
+    ];
+    const metadata = { operationClass: classification.operationClass, requirements };
+    const denied = requirements.find(item => item.decision === Decision.DENY);
+    if (denied) return { ...metadata, ...denied, reason: `Required permission is denied: ${denied.category}` };
+    const rule = matchCommandRule(policy, input.command, args, input.cwd);
     const exactAllowRule = rule?.action === Decision.ALLOW
       && (rule.argsPrefix?.length ?? 0) === args.length;
     if (rule && (!dangerous || rule.action !== Decision.ALLOW || exactAllowRule)) {
-      const pattern = [rule.executable, ...(rule.argsPrefix ?? [])].join(' ');
-      return { decision: rule.action, category: 'commandRule', rule, reason: `Matched command rule: ${pattern}` };
+      return { ...metadata, decision: rule.action, category: 'commandRule', rule,
+        reason: `Matched ${rule.exact ? 'exact' : 'legacy prefix'} command rule. ${classification.reason}` };
     }
-    if (dangerous) {
-      return {
-        decision: policy.categories.dangerous ?? Decision.ASK,
-        category: 'dangerous',
-        reason: rule?.action === Decision.ALLOW
-          ? 'Command rule matched, but dangerous commands require an exact argument match'
-          : 'Command is potentially destructive or can invoke external behavior'
-      };
-    }
+    const required = requirements.find(item => item.decision === Decision.ASK)
+      ?? requirements[requirements.length - 1];
+    return { ...metadata, ...required, reason: classification.reason };
   }
 
   return {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { activeApproval, approvalChoices, approvalImpact, approvalVisibleRows,
+import { activeApproval, approvalCategoryLabel, approvalChoices, approvalImpact, approvalVisibleRows,
   defaultApprovalSelection, safeApprovalText, visibleTuiScreen } from '../src/tui/approval-view.js';
 import { createApprovalQueue } from '../src/permissions/approvals.js';
 import { createRemoteDashboardState } from '../src/tui/remote.js';
@@ -8,6 +8,15 @@ import { createRemoteDashboardState } from '../src/tui/remote.js';
 function request(category, toolName = 'browser_open') {
   return { category, toolName, description: 'Tool needs approval.' };
 }
+
+test('install approvals explain dependency scripts instead of displaying a generic dangerous label', () => {
+  const install = { toolName: 'run_command', category: 'dangerous', evaluation: {
+    operationClass: 'dependency-install', reason: 'Installs dependencies and may run package scripts on this computer.'
+  } };
+  assert.equal(approvalCategoryLabel(install), 'Install dependencies');
+  assert.match(approvalImpact(install), /package scripts/);
+  assert.equal(approvalCategoryLabel({ ...install, category: 'outsideRoot' }), 'Outside workspace');
+});
 
 test('every prompt selects Deny by default, browser approval can only be allowed once', () => {
   for (const category of ['browserSensitive', 'persistentProfile', 'browserExternal',
@@ -28,7 +37,7 @@ test('only narrow legacy rules can be remembered and never by default', () => {
   const outside = approvalChoices({ category: 'outsideRoot', toolName: 'read_file', pathInfo: { scope: 'outside' } });
   const command = approvalChoices({ category: 'command', toolName: 'run_command' });
   assert.deepEqual(outside[1], { label: 'Always allow this location', action: 'allow', remember: 'root' });
-  assert.deepEqual(command[1], { label: 'Always allow this command', action: 'allow', remember: 'command' });
+  assert.deepEqual(command[1], { label: 'Remember exact command here', action: 'allow', remember: 'command' });
   assert.equal(defaultApprovalSelection({ category: 'command', toolName: 'run_command' }), 2);
   assert.equal(approvalChoices({ category: 'outsideRoot', toolName: 'read_file', pathInfo: { scope: 'inside' } }).length, 2);
 });

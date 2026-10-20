@@ -3,6 +3,12 @@ import { readFileSync } from 'node:fs';
 import { normalizePolicy } from './policy.js';
 import { claimPolicyRemoteGeneration, updatePolicy } from './store.js';
 
+function sameRule(left, right) {
+  return left.executable === right.executable
+    && JSON.stringify(left.argsPrefix ?? []) === JSON.stringify(right.argsPrefix ?? [])
+    && Boolean(left.exact) === Boolean(right.exact) && left.cwd === right.cwd;
+}
+
 export function createPolicyManager(initialPolicy, { filePath } = {}) {
   let policy = normalizePolicy(initialPolicy);
   let hasReadDisk = false;
@@ -69,19 +75,21 @@ export function createPolicyManager(initialPolicy, { filePath } = {}) {
         categories: { ...current.categories, ...categories }
       }), options);
     },
-    async addCommandRule(rule) {
+    async addCommandRule(rule, options = {}) {
       const normalized = {
         executable: rule.executable,
         argsPrefix: Array.isArray(rule.argsPrefix) ? rule.argsPrefix : [],
+        ...(rule.exact === true ? { exact: true } : {}),
+        ...(typeof rule.cwd === 'string' ? { cwd: path.resolve(rule.cwd) } : {}),
         action: rule.action ?? 'ask'
       };
       return mutate((current) => {
         const commandRules = current.commandRules.filter((item) =>
-          !(item.executable === normalized.executable && JSON.stringify(item.argsPrefix ?? []) === JSON.stringify(normalized.argsPrefix))
+          !sameRule(item, normalized)
         );
         commandRules.push(normalized);
         return normalizePolicy({ ...current, commandRules });
-      });
+      }, options);
     },
     async removeCommandRule(index) {
       const target = policy.commandRules[index];
@@ -89,7 +97,7 @@ export function createPolicyManager(initialPolicy, { filePath } = {}) {
       return mutate((current) => normalizePolicy({
         ...current,
         commandRules: current.commandRules.filter((item) =>
-          !(item.executable === target.executable && JSON.stringify(item.argsPrefix ?? []) === JSON.stringify(target.argsPrefix ?? []))
+          !sameRule(item, target)
         )
       }));
     },

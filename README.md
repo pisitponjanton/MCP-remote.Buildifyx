@@ -335,7 +335,13 @@ Detached instances keep ASK requests pending. `bdxa attach <name|id>` opens the 
 
 ### Command executable scope
 
-By default, command execution remains restricted by the local command policy. Advanced users can permit arbitrary executable names with:
+Command policy evaluates each operation before execution. `git --version` and the exact `rg --files` / `rg --version` shapes can run without sensitive-command consent; ripgrep reads also require read permission and run with configuration loading disabled. Dependency installation, project scripts and unknown commands request approval or use an exact command rule. They do not require all five base permissions set to Allow. Installation requires write permission; explicit Deny in a required category cannot be overridden by an Allow rule.
+
+`Allow once` applies to the current invocation. `Remember exact command here` saves its executable, full arguments and canonical working directory for this instance. A changed argument or directory requires another approval. Remembered commands trust future runs, including changes to project scripts; use Allow once when that continuing trust is not intended. Existing manually configured prefix rules remain supported, with exact-argument matching required for sensitive operations.
+
+Commands run on the host and are not confined by an OS sandbox. Outside-root checks cover the command working directory, not every filesystem operation performed by subprocesses. Policy/rule revocation is checked again before spawn; it does not automatically terminate an already-running command. See [command consent decisions](docs/adr-command-consent.md) and [verification results](docs/permission-validation.md).
+
+Advanced users can explicitly permit unclassified executable names without their usual approval fallback with:
 
 ```bash
 bdxa --unrestricted-commands

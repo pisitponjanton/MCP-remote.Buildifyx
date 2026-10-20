@@ -4,6 +4,9 @@ import path from 'node:path';
 import process from 'node:process';
 import { resolveSafePath } from '../security/path.js';
 import { AgentError, ErrorCode, asFileError } from '../core/errors.js';
+import { classifyCommand } from '../permissions/evaluator.js';
+import { validateExecutableName } from '../security/command.js';
+import { npmInvocation } from '../utils/npm-invocation.js';
 
 export const MAX_OUTPUT_BYTES = 256 * 1024;
 export const MAX_TIMEOUT_MS = 60_000;
@@ -20,12 +23,6 @@ function compactArgs(args) {
   return shown;
 }
 
-function validateExecutableName(command) {
-  if (command.includes('/') || command.includes('\\') || path.basename(command) !== command) {
-    throw new AgentError(ErrorCode.INVALID_INPUT, 'Command must be an executable name, not a path.');
-  }
-}
-
 function validateRestrictedArgs(command, args) {
   if (command === 'npm' && (args[0] === 'exec' || args[0] === 'x')) {
     throw new AgentError(ErrorCode.COMMAND_NOT_ALLOWED, 'npm exec is not allowed in restricted mode.');
@@ -38,17 +35,22 @@ function validateRestrictedArgs(command, args) {
 export function validateCommandPolicy(command, args, { fullAccess = false, allowCustomCommand = false } = {}) {
   validateExecutableName(command);
   if (fullAccess || allowCustomCommand) return;
+  if (command === 'rg' && !classifyCommand(command, args).requiresApproval) return;
   if (!RESTRICTED_COMMANDS.has(command)) {
     throw new AgentError(ErrorCode.COMMAND_NOT_ALLOWED, `Command is not allowed in restricted mode: ${command}`);
   }
   validateRestrictedArgs(command, args);
 }
 
-function resolveExecutable(command) {
-  if (process.platform === 'win32' && ['npm', 'npx', 'pnpm', 'yarn'].includes(command)) {
-    return `${command}.cmd`;
+function resolveInvocation(command, args) {
+  if (command === 'npm') {
+    try { return npmInvocation(args); }
+    catch { throw new AgentError(ErrorCode.COMMAND_NOT_FOUND, 'Cannot locate a shell-free npm CLI on this host.'); }
   }
-  return command;
+  if (process.platform === 'win32' && ['npx', 'pnpm', 'yarn'].includes(command)) {
+    return { command: `${command}.cmd`, args };
+  }
+  return { command, args };
 }
 
 function childExited(child) {
@@ -247,6 +249,10 @@ export function createCommandService({ root, fullAccess = false }) {
   };
 
   async function runCommand({ command, args = [], cwd = '.', timeoutMs = 15_000 }, context = {}) {
+    if (!Array.isArray(args) || args.some(arg => typeof arg !== 'string')) {
+      throw new AgentError(ErrorCode.INVALID_INPUT, 'Command arguments must be strings.');
+    }
+    args = [...args]; // keep the authorized argv stable across asynchronous cwd validation
     validateCommandPolicy(command, args, { fullAccess, allowCustomCommand: context.allowCustomCommand });
 
     const resolvedCwd = context.pathInfo?.resolved ?? await resolveSafePath(root, cwd).catch(error => {
@@ -256,6 +262,15 @@ export function createCommandService({ root, fullAccess = false }) {
       throw error;
     });
     context.throwIfCancelled?.();
+
+    const grant = context.commandAuthorization;
+    if (grant && (grant.command !== command || grant.cwd !== resolvedCwd
+      || JSON.stringify(grant.args) !== JSON.stringify(args))) {
+      throw new AgentError(ErrorCode.PERMISSION_DENIED, 'Command does not match the authorized invocation.', {
+        toolName: 'run_command', category: 'command', gate: 'invocation', nextAction: 'requestExactApproval'
+      });
+    }
+    context.assertStillAllowed?.();
     const cwdStat = await stat(resolvedCwd).catch(error => { throw asFileError(error, { missing: ErrorCode.COMMAND_CWD_INVALID, notDirectory: ErrorCode.COMMAND_CWD_INVALID }); });
     if (!cwdStat.isDirectory()) throw new AgentError(ErrorCode.COMMAND_CWD_INVALID, 'cwd must be a directory.');
     context.throwIfCancelled?.();
@@ -268,7 +283,14 @@ export function createCommandService({ root, fullAccess = false }) {
       sandboxed: false
     });
 
-    const execution = await executeFile(resolveExecutable(command), args, {
+    // Safe ripgrep shapes never load RIPGREP_CONFIG_PATH (which can inject
+    // --pre, --follow or extra paths). Other shapes still require explicit consent.
+    const executionArgs = classifyCommand(command, args).executionArgs ?? args;
+    await context.assertCommandStillAllowed?.();
+    context.assertStillAllowed?.();
+    context.throwIfCancelled?.();
+    const invocation = resolveInvocation(command, executionArgs);
+    const execution = await executeFile(invocation.command, invocation.args, {
       cwd: resolvedCwd,
       timeoutMs
     }, {
@@ -288,7 +310,9 @@ export function createCommandService({ root, fullAccess = false }) {
       command,
       args,
       cwd: path.relative(root, resolvedCwd) || '.',
-      mode: fullAccess ? 'full_access' : context.allowCustomCommand ? 'custom_rule' : 'restricted',
+      mode: fullAccess ? 'full_access'
+        : grant?.source === 'policy' ? 'restricted' : context.allowCustomCommand ? 'custom_rule' : 'restricted',
+      ...(grant ? { authorization: { source: grant.source, operationClass: grant.operationClass } } : {}),
       ...execution
     };
   }

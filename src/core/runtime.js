@@ -173,7 +173,7 @@ export function createRuntime({
     else if (persistentRestricted) void services.closeActive?.({ persistentOnly: true }).catch(() => undefined);
   });
   const authorize = createPermissionController({ root, policyManager, approvalQueue: activeApprovalQueue, eventBus,
-    artifactRequiresCapture: services.__artifactRequiresCapture });
+    artifactRequiresCapture: services.__artifactRequiresCapture, unrestrictedCommands: fullAccess });
   const requestLifecycle = createRequestLifecycle();
   const dispatch = createDispatcher({ services, authorize, eventBus, requestLifecycle });
   const cancellationError = (reason) => new AgentError(ErrorCode.REQUEST_CANCELLED, reason);

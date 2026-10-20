@@ -21,7 +21,7 @@ export function approvalChoices(request) {
   if (request?.category === 'outsideRoot' && request?.pathInfo?.scope === 'outside') {
     choices.push({ label: 'Always allow this location', action: 'allow', remember: 'root' });
   } else if (request?.toolName === 'run_command' && request?.category !== 'browserSensitive') {
-    choices.push({ label: 'Always allow this command', action: 'allow', remember: 'command' });
+    choices.push({ label: 'Remember exact command here', action: 'allow', remember: 'command' });
   }
   choices.push({ label: 'Deny', action: 'deny', remember: null });
   return choices;
@@ -31,7 +31,26 @@ export function defaultApprovalSelection(request) {
   return approvalChoices(request).length - 1; // fail closed; Enter never defaults to Allow
 }
 
+export function approvalCategoryLabel(request) {
+  if (request?.category === 'outsideRoot') return 'Outside workspace';
+  if (request?.toolName === 'run_command') {
+    const label = {
+      'dependency-install': 'Install dependencies',
+      'code-execution': 'Run project code',
+      'repository-change': 'Git changes / helpers',
+      'destructive': 'Delete data / control processes',
+      'unclassified': 'Review host command',
+      'workspace-read': 'Read workspace',
+      'developer-query': 'Developer query'
+    }[request.evaluation?.operationClass];
+    if (label) return label;
+  }
+  return request?.category ?? 'permission';
+}
+
 export function approvalImpact(request) {
+  if (request?.toolName === 'run_command' && request?.category !== 'outsideRoot'
+    && request?.evaluation?.operationClass) return request.evaluation.reason;
   if (request?.category === 'browserSensitive') return 'Sensitive browser action: explicitly approve this request only.';
   if (request?.category === 'persistentProfile') return 'Persistent browser profile: never remember this approval automatically.';
   if (request?.category === 'browserExternal') return 'Access to a website outside localhost requires approval.';

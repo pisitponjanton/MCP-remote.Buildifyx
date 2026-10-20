@@ -102,6 +102,7 @@ const PUBLIC_TOOL_MESSAGES = Object.freeze({
   [ErrorCode.FILE_EXISTS]: 'File already exists; overwriting is not allowed.',
   [ErrorCode.COMMAND_NOT_FOUND]: 'Command executable was not found.',
   [ErrorCode.COMMAND_CWD_INVALID]: 'Command working directory does not exist or is not a directory.',
+  [ErrorCode.COMMAND_NOT_ALLOWED]: 'Command requires authorization for its exact executable and arguments. Review local command policy.',
   [ErrorCode.PATH_OUTSIDE_ROOT]: 'Path is outside the authorized workspace root.',
   [ErrorCode.GIT_INTERNAL_PATH]: 'Access to Git internals is not allowed.',
   IMAGE_NOT_FOUND: 'Image file not found in the selected workspace.',
@@ -131,6 +132,14 @@ export function publicToolError(error) {
   if ([ErrorCode.PERMISSION_DENIED, ErrorCode.CONFIRMATION_REQUIRED].includes(code) && details) {
     if (typeof details.category === 'string' && /^[a-zA-Z]{1,40}$/.test(details.category)) safeDetails.category = details.category;
     if (typeof details.toolName === 'string' && /^[a-z_]{1,80}$/.test(details.toolName)) safeDetails.toolName = details.toolName;
+    // Enumerated diagnostics only: never expose user-supplied argv or paths.
+    for (const [key, allowed] of Object.entries({
+      operationClass: ['destructive', 'workspace-read', 'developer-query', 'repository-change', 'dependency-install', 'code-execution', 'unclassified'],
+      gate: ['localPolicy', 'approval', 'invocation'],
+      nextAction: ['reviewLocalPolicy', 'attachApprover', 'requestExactApproval']
+    })) {
+      if (allowed.includes(details[key])) safeDetails[key] = details[key];
+    }
   }
   return { code, message, ...(Object.keys(safeDetails).length ? { details: safeDetails } : {}) };
 }

@@ -230,6 +230,49 @@ test('one local MCP port routes shared tools to multiple local instances', async
   }
 });
 
+test('real Local MCP executes scoped commands without Full Access and returns safe permission diagnostics', async () => {
+  const fixture = await setupFixture();
+  const port = await freePort();
+  try {
+    assert.equal((await runCli(['local', 'up', String(port)], fixture)).code, 0);
+    assert.equal((await runCli(['local', '-d', '--root', fixture.workspaceA, '--name', 'permission-fixture'], fixture)).code, 0);
+    await waitFor(async () => (await localRecords(fixture)).some(item => item.status === 'connected'));
+    const record = (await localRecords(fixture))[0];
+    for (const [category, action] of [['write', 'deny'], ['outsideRoot', 'deny']]) {
+      const updated = await requestInstanceControl(record, 'policy.setCategory', { payload: { category, action } });
+      assert.equal(updated.ok, true);
+    }
+    const sessionId = await initializeMcp(port);
+    let id = 100;
+    const call = args => mcpCall(port, sessionId, id++, 'tools/call', { name: 'run_command', arguments: { workspace: 'permission-fixture', ...args } });
+    assert.equal((await call({ command: 'git', args: ['--version'] })).result.structuredContent.exitCode, 0);
+
+    const invocation = call({ command: 'node', args: ['--version'] });
+    let request;
+    await waitFor(async () => {
+      const response = await requestInstanceControl(record, 'approval.list');
+      request = response.approvals?.[0];
+      return request;
+    });
+    assert.equal(request.evaluation.operationClass, 'unclassified');
+    assert.equal((await requestInstanceControl(record, 'approval.resolve', { payload: {
+      approvalId: request.id, action: 'allow', remember: null
+    } })).ok, true);
+    assert.equal((await invocation).result.structuredContent.exitCode, 0);
+
+    assert.equal((await requestInstanceControl(record, 'policy.setCategory', {
+      payload: { category: 'command', action: 'deny' }
+    })).ok, true);
+    const blocked = (await call({ command: 'git', args: ['--version'] })).result.structuredContent.error;
+    assert.equal(blocked.code, 'PERMISSION_DENIED');
+    assert.equal(blocked.details.category, 'command');
+    assert.equal(blocked.details.operationClass, 'developer-query');
+    assert.equal(blocked.details.gate, 'localPolicy');
+    assert.equal(blocked.details.nextAction, 'reviewLocalPolicy');
+    assert.equal(JSON.stringify(blocked).includes(fixture.workspaceA), false);
+  } finally { await cleanupFixture(fixture); }
+});
+
 async function installAutostartStub(fixture) {
   const bin = path.join(fixture.home, 'bin');
   await mkdir(bin, { recursive: true });

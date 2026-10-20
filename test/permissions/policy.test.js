@@ -194,7 +194,7 @@ test('outside-root and dangerous command permissions require distinct approvals'
     const runtime = createRuntime({ root, policyManager, interactive: true });
     const requestId = 'req_two_permission_gates';
 
-    const execution = runtime.dispatch('run_command', { command: 'git', args: ['--version'], cwd: outside }, { requestId });
+    const execution = runtime.dispatch('run_command', { command: 'node', args: ['--version'], cwd: outside }, { requestId });
     const scopeRequest = await waitForPending(runtime.approvalQueue);
     assert.equal(scopeRequest.category, 'outsideRoot');
     assert.equal(scopeRequest.requestId, requestId);
@@ -211,7 +211,7 @@ test('outside-root and dangerous command permissions require distinct approvals'
 
     const result = await execution;
     assert.equal(result.exitCode, 0);
-    assert.match(result.stdout, /git version/i);
+    assert.match(result.stdout, /^v\d+/);
   });
 });
 test('outside-root approval does not unlock an arbitrary executable', async () => {
@@ -229,6 +229,9 @@ test('outside-root approval does not unlock an arbitrary executable', async () =
     assert.equal(scopeRequest.category, 'outsideRoot');
     runtime.approvalQueue.resolve(scopeRequest.id, { action: 'allow', remember: null });
 
-    await assert.rejects(execution, /Command is not allowed in restricted mode: node/);
+    const commandRequest = await waitForPending(runtime.approvalQueue);
+    assert.equal(commandRequest.category, 'dangerous');
+    runtime.approvalQueue.resolve(commandRequest.id, { action: 'deny', remember: null });
+    await assert.rejects(execution, { code: 'PERMISSION_DENIED' });
   });
 });

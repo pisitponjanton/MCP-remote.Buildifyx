@@ -42,7 +42,7 @@ test('cancellation between sequential permission gates prevents a later approval
       interactive: true
     });
     const requestId = 'req_sequential_cancel';
-    const execution = runtime.dispatch('run_command', { command: 'git', args: ['--version'], cwd: outside }, { requestId });
+    const execution = runtime.dispatch('run_command', { command: 'node', args: ['--version'], cwd: outside }, { requestId });
 
     for (let index = 0; index < 50 && runtime.approvalQueue.getPending().length === 0; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2));

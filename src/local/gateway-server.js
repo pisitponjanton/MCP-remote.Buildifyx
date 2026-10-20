@@ -91,7 +91,10 @@ export function createLocalGateway({ environment, version, gatewayId, controlTok
       } finally {
         signal?.removeEventListener('abort', onAbort);
       }
-      if (!response?.ok) throw Object.assign(new Error(response?.error ?? 'Local instance tool call failed.'), { code: response?.code });
+      // Keep the instance's already-sanitized permission diagnostics. errorResult
+      // applies the public whitelist again before returning anything to MCP.
+      if (!response?.ok) throw new AgentError(response?.code ?? ErrorCode.INTERNAL_ERROR,
+        response?.error ?? 'Local instance tool call failed.', response?.details);
       const result = response.result;
       if (isMediaResult(tool, result)) {
         const invoke = async (command, payload, signalToUse = signal) => {

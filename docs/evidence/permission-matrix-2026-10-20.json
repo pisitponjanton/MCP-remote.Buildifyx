@@ -1,0 +1,610 @@
+{
+  "date": "2026-10-20",
+  "baseCommit": "fd494b88706e77bd83e7c5c123e28bc81ed23bee",
+  "environment": {
+    "node": "v26.0.0",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "scope": "Disposable offline runtime fixtures; no production deployment or real global installs/deletions.",
+  "before": [
+    {
+      "id": "git-version",
+      "namespace": "local",
+      "command": "git --version",
+      "expected": "completed",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous"
+      }
+    },
+    {
+      "id": "rg-files",
+      "namespace": "local",
+      "command": "rg --files",
+      "expected": "completed",
+      "outcome": "COMMAND_NOT_ALLOWED",
+      "prompts": [],
+      "passed": false
+    },
+    {
+      "id": "rg-read-denied",
+      "namespace": "local",
+      "command": "rg --files",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "COMMAND_NOT_ALLOWED",
+      "prompts": []
+    },
+    {
+      "id": "install-once",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "completed",
+      "outcome": "completed",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "Command is potentially destructive or can invoke external behavior"
+        }
+      ],
+      "hookRan": true,
+      "passed": true
+    },
+    {
+      "id": "install-no-scripts",
+      "namespace": "local",
+      "command": "npm install --ignore-scripts (offline fixture)",
+      "expected": "completed",
+      "outcome": "completed",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "Command is potentially destructive or can invoke external behavior"
+        }
+      ],
+      "hookRan": false,
+      "passed": true
+    },
+    {
+      "id": "install-rejected",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "Command is potentially destructive or can invoke external behavior"
+        }
+      ],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous"
+      },
+      "hookRan": false,
+      "passed": true
+    },
+    {
+      "id": "install-unattended",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "CONFIRMATION_REQUIRED",
+      "outcome": "CONFIRMATION_REQUIRED",
+      "prompts": [],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous"
+      },
+      "hookRan": false,
+      "passed": true
+    },
+    {
+      "id": "install-command-denied",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "completed",
+      "prompts": [],
+      "hookRan": true
+    },
+    {
+      "id": "install-write-denied",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "completed",
+      "prompts": [],
+      "hookRan": true
+    },
+    {
+      "id": "install-risk-denied",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "completed",
+      "prompts": [],
+      "hookRan": true
+    },
+    {
+      "id": "project-build-once",
+      "namespace": "local",
+      "command": "npm run build",
+      "expected": "completed",
+      "outcome": "completed",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "Command is potentially destructive or can invoke external behavior"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "unknown-once",
+      "namespace": "local",
+      "command": "node --version",
+      "expected": "completed",
+      "outcome": "COMMAND_NOT_ALLOWED",
+      "prompts": []
+    },
+    {
+      "id": "unknown-rejected",
+      "namespace": "local",
+      "command": "node --version",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "COMMAND_NOT_ALLOWED",
+      "prompts": []
+    },
+    {
+      "id": "unknown-unattended",
+      "namespace": "local",
+      "command": "node --version",
+      "expected": "CONFIRMATION_REQUIRED",
+      "outcome": "COMMAND_NOT_ALLOWED",
+      "prompts": []
+    },
+    {
+      "id": "unknown-exact-rule",
+      "namespace": "local",
+      "command": "node --version",
+      "expected": "completed",
+      "outcome": "completed",
+      "prompts": [],
+      "passed": true
+    },
+    {
+      "id": "outside-cwd-denied",
+      "namespace": "local",
+      "command": "node --version",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [],
+      "details": {
+        "toolName": "run_command",
+        "category": "outsideRoot"
+      },
+      "passed": true
+    },
+    {
+      "id": "destructive-rejected",
+      "namespace": "local",
+      "command": "rm sentinel.txt",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "Command is potentially destructive or can invoke external behavior"
+        }
+      ],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous"
+      },
+      "passed": true
+    },
+    {
+      "id": "rg-helper-rejected",
+      "namespace": "local",
+      "command": "rg --pre node needle",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "COMMAND_NOT_ALLOWED",
+      "prompts": []
+    },
+    {
+      "id": "extended-install-rule-rejected",
+      "namespace": "local",
+      "command": "npm install --global",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "Command rule matched, but dangerous commands require an exact argument match"
+        }
+      ],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous"
+      },
+      "passed": true
+    },
+    {
+      "id": "executable-path-rejected",
+      "namespace": "local",
+      "command": "/bin/sh -c exit 0",
+      "expected": "INVALID_INPUT",
+      "outcome": "INVALID_INPUT",
+      "prompts": [],
+      "passed": true
+    },
+    {
+      "id": "shell-string-rejected",
+      "namespace": "local",
+      "command": "npm --version && node --version ",
+      "expected": "INVALID_INPUT",
+      "outcome": "COMMAND_NOT_ALLOWED",
+      "prompts": []
+    },
+    {
+      "id": "missing-executable",
+      "namespace": "local",
+      "command": "bdxa-permission-nonexistent-command ",
+      "expected": "COMMAND_NOT_FOUND",
+      "outcome": "COMMAND_NOT_ALLOWED",
+      "prompts": []
+    }
+  ],
+  "after": [
+    {
+      "id": "git-version",
+      "namespace": "local",
+      "command": "git --version",
+      "expected": "completed",
+      "outcome": "completed",
+      "prompts": [],
+      "passed": true
+    },
+    {
+      "id": "rg-files",
+      "namespace": "local",
+      "command": "rg --files",
+      "expected": "completed",
+      "outcome": "completed",
+      "prompts": [],
+      "passed": true
+    },
+    {
+      "id": "rg-read-denied",
+      "namespace": "local",
+      "command": "rg --files",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [],
+      "details": {
+        "toolName": "run_command",
+        "category": "read",
+        "operationClass": "workspace-read",
+        "gate": "localPolicy",
+        "nextAction": "reviewLocalPolicy"
+      },
+      "passed": true
+    },
+    {
+      "id": "install-once",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "completed",
+      "outcome": "completed",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "Installs or changes dependencies and may execute package scripts on this computer. Approve this invocation or remember its exact arguments in this directory.",
+          "operationClass": "dependency-install"
+        }
+      ],
+      "hookRan": true,
+      "passed": true
+    },
+    {
+      "id": "install-no-scripts",
+      "namespace": "local",
+      "command": "npm install --ignore-scripts (offline fixture)",
+      "expected": "completed",
+      "outcome": "completed",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "Installs or changes dependencies and may execute package scripts on this computer. Approve this invocation or remember its exact arguments in this directory.",
+          "operationClass": "dependency-install"
+        }
+      ],
+      "hookRan": false,
+      "passed": true
+    },
+    {
+      "id": "install-rejected",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "Installs or changes dependencies and may execute package scripts on this computer. Approve this invocation or remember its exact arguments in this directory.",
+          "operationClass": "dependency-install"
+        }
+      ],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous",
+        "operationClass": "dependency-install",
+        "gate": "localPolicy",
+        "nextAction": "reviewLocalPolicy"
+      },
+      "hookRan": false,
+      "passed": true
+    },
+    {
+      "id": "install-unattended",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "CONFIRMATION_REQUIRED",
+      "outcome": "CONFIRMATION_REQUIRED",
+      "prompts": [],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous",
+        "operationClass": "dependency-install",
+        "gate": "approval",
+        "nextAction": "attachApprover"
+      },
+      "hookRan": false,
+      "passed": true
+    },
+    {
+      "id": "install-command-denied",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [],
+      "details": {
+        "toolName": "run_command",
+        "category": "command",
+        "operationClass": "dependency-install",
+        "gate": "localPolicy",
+        "nextAction": "reviewLocalPolicy"
+      },
+      "hookRan": false,
+      "passed": true
+    },
+    {
+      "id": "install-write-denied",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [],
+      "details": {
+        "toolName": "run_command",
+        "category": "write",
+        "operationClass": "dependency-install",
+        "gate": "localPolicy",
+        "nextAction": "reviewLocalPolicy"
+      },
+      "hookRan": false,
+      "passed": true
+    },
+    {
+      "id": "install-risk-denied",
+      "namespace": "local",
+      "command": "npm install (offline fixture)",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous",
+        "operationClass": "dependency-install",
+        "gate": "localPolicy",
+        "nextAction": "reviewLocalPolicy"
+      },
+      "hookRan": false,
+      "passed": true
+    },
+    {
+      "id": "project-build-once",
+      "namespace": "local",
+      "command": "npm run build",
+      "expected": "completed",
+      "outcome": "completed",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "This package-manager operation can execute project code or change configuration on this computer.",
+          "operationClass": "code-execution"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "unknown-once",
+      "namespace": "local",
+      "command": "node --version",
+      "expected": "completed",
+      "outcome": "completed",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "This executable or argument pattern is not classified. Approve this invocation or add a scoped exact command rule; Full Access is not required.",
+          "operationClass": "unclassified"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "unknown-rejected",
+      "namespace": "local",
+      "command": "node --version",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "This executable or argument pattern is not classified. Approve this invocation or add a scoped exact command rule; Full Access is not required.",
+          "operationClass": "unclassified"
+        }
+      ],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous",
+        "operationClass": "unclassified",
+        "gate": "localPolicy",
+        "nextAction": "reviewLocalPolicy"
+      },
+      "passed": true
+    },
+    {
+      "id": "unknown-unattended",
+      "namespace": "local",
+      "command": "node --version",
+      "expected": "CONFIRMATION_REQUIRED",
+      "outcome": "CONFIRMATION_REQUIRED",
+      "prompts": [],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous",
+        "operationClass": "unclassified",
+        "gate": "approval",
+        "nextAction": "attachApprover"
+      },
+      "passed": true
+    },
+    {
+      "id": "unknown-exact-rule",
+      "namespace": "local",
+      "command": "node --version",
+      "expected": "completed",
+      "outcome": "completed",
+      "prompts": [],
+      "passed": true
+    },
+    {
+      "id": "outside-cwd-denied",
+      "namespace": "local",
+      "command": "node --version",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [],
+      "details": {
+        "toolName": "run_command",
+        "category": "outsideRoot",
+        "gate": "localPolicy",
+        "nextAction": "reviewLocalPolicy"
+      },
+      "passed": true
+    },
+    {
+      "id": "destructive-rejected",
+      "namespace": "local",
+      "command": "rm sentinel.txt",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "This command can delete data or control host processes.",
+          "operationClass": "destructive"
+        }
+      ],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous",
+        "operationClass": "destructive",
+        "gate": "localPolicy",
+        "nextAction": "reviewLocalPolicy"
+      },
+      "passed": true
+    },
+    {
+      "id": "rg-helper-rejected",
+      "namespace": "local",
+      "command": "rg --pre node needle",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "This executable or argument pattern is not classified. Approve this invocation or add a scoped exact command rule; Full Access is not required.",
+          "operationClass": "unclassified"
+        }
+      ],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous",
+        "operationClass": "unclassified",
+        "gate": "localPolicy",
+        "nextAction": "reviewLocalPolicy"
+      },
+      "passed": true
+    },
+    {
+      "id": "extended-install-rule-rejected",
+      "namespace": "local",
+      "command": "npm install --global",
+      "expected": "PERMISSION_DENIED",
+      "outcome": "PERMISSION_DENIED",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "Installs or changes dependencies and may execute package scripts on this computer. Approve this invocation or remember its exact arguments in this directory.",
+          "operationClass": "dependency-install"
+        }
+      ],
+      "details": {
+        "toolName": "run_command",
+        "category": "dangerous",
+        "operationClass": "dependency-install",
+        "gate": "localPolicy",
+        "nextAction": "reviewLocalPolicy"
+      },
+      "passed": true
+    },
+    {
+      "id": "executable-path-rejected",
+      "namespace": "local",
+      "command": "/bin/sh -c exit 0",
+      "expected": "INVALID_INPUT",
+      "outcome": "INVALID_INPUT",
+      "prompts": [],
+      "passed": true
+    },
+    {
+      "id": "shell-string-rejected",
+      "namespace": "local",
+      "command": "npm --version && node --version ",
+      "expected": "INVALID_INPUT",
+      "outcome": "INVALID_INPUT",
+      "prompts": [],
+      "passed": true
+    },
+    {
+      "id": "missing-executable",
+      "namespace": "local",
+      "command": "bdxa-permission-nonexistent-command ",
+      "expected": "COMMAND_NOT_FOUND",
+      "outcome": "COMMAND_NOT_FOUND",
+      "prompts": [
+        {
+          "category": "dangerous",
+          "reason": "This executable or argument pattern is not classified. Approve this invocation or add a scoped exact command rule; Full Access is not required.",
+          "operationClass": "unclassified"
+        }
+      ],
+      "passed": true
+    }
+  ]
+}

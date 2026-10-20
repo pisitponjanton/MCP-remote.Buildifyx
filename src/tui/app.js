@@ -4,7 +4,7 @@ import { applyProfile, detectProfile, PROFILES } from './profiles.js';
 import { groupActivities, shortTime, statusColor, statusGlyph } from './model.js';
 import { useTuiLayout } from './layout.js';
 import { PERMISSION_CATEGORIES, effectivePermission, extraPermissionSummary, permissionViewport } from './permission-view.js';
-import { activeApproval, approvalChoices, approvalImpact, approvalVisibleRows,
+import { activeApproval, approvalCategoryLabel, approvalChoices, approvalImpact, approvalVisibleRows,
   defaultApprovalSelection, safeApprovalText, visibleTuiScreen } from './approval-view.js';
 
 const h = React.createElement;
@@ -115,7 +115,7 @@ function ApprovalPanel({ request, pendingCount, selected, attached = false, comp
     h(Text, { color: 'yellow', bold: true, wrap: 'truncate-end' },
       `APPROVAL REQUIRED · 1 of ${pendingCount}`),
     h(Text, { bold: true, wrap: 'truncate-end' },
-      `${safeApprovalText(request.toolName ?? 'Tool', 80)} · ${safeApprovalText(request.category ?? 'permission', 50)}`),
+      `${safeApprovalText(request.toolName ?? 'Tool', 80)} · ${safeApprovalText(approvalCategoryLabel(request), 50)}`),
     h(Text, { wrap: 'truncate-end' }, safeApprovalText(request.description ?? 'A tool needs permission.')),
     !compact && request.pathInfo?.resolved
       ? h(Text, { wrap: 'truncate-end' }, `Location  ${safeApprovalText(request.pathInfo.resolved)}`) : null,
@@ -199,11 +199,11 @@ function RootsScreen({ root, roots, selected, inputMode, buffer }) {
 function CommandsScreen({ rules, selected, inputMode, buffer }) {
   return h(Box, { borderStyle: 'classic', paddingX: 1, flexDirection: 'column', flexGrow: 1 },
     title('COMMAND RULES'),
-    h(Text, { dimColor: true }, 'Rules match an executable plus argument prefix. Commands do not run through a shell.'),
+    h(Text, { dimColor: true }, 'Remembered approvals match exact arguments and directory. Legacy/manual rules may match prefixes.'),
     h(Text, null, ''),
     rules.length === 0 ? h(Text, { dimColor: true }, 'No custom command rules.') : null,
     ...rules.map((rule, index) => h(Text, { key: `${rule.executable}-${index}`, bold: index === selected, wrap: 'truncate-end' },
-      `${index === selected ? '›' : ' '} ${(rule.executable + ' ' + (rule.argsPrefix ?? []).join(' ')).trim().padEnd(28)} [ ${String(rule.action).toUpperCase()} ]`
+      `${index === selected ? '›' : ' '} ${(rule.executable + ' ' + (rule.argsPrefix ?? []).join(' ')).trim().padEnd(28)} [ ${String(rule.action).toUpperCase()} ]${rule.exact ? ' exact' : ' prefix'}${rule.cwd ? ` in ${safeApprovalText(rule.cwd)}` : ''}`
     )),
     inputMode === 'command' ? h(Text, null, `\nNew rule: ${buffer}█`) : null
   );

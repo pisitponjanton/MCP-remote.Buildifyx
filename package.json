@@ -12,6 +12,7 @@
     "doctor": "node ./src/cli.js doctor",
     "check": "node ./scripts/check.js",
     "test": "node ./scripts/run-tests.js",
+    "verify:permissions": "node ./scripts/verify-command-permissions.js",
     "browser:check": "node ./src/cli.js browser check",
     "browser:install": "node ./src/cli.js browser install",
     "pack:check": "node ./scripts/verify-package.js",

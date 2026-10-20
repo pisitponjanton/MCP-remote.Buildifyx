@@ -16,7 +16,7 @@ export function getCommandToolDefinitions({ fullAccess = false } = {}) {
       title: 'Run command',
       description: fullAccess
         ? `Run a command in FULL ACCESS mode. Commands are not sandboxed. Use read_file/write_file/edit_file for source or text instead of passing large file contents in command arguments. Timeout: ${MAX_TIMEOUT_MS} ms; output: ${MAX_OUTPUT_BYTES} bytes per stream.`
-        : `Run a restricted developer command without a shell. Use read_file/write_file/edit_file for source or text instead of passing large file contents in command arguments. cwd must stay inside an allowed root unless approved. Timeout: ${MAX_TIMEOUT_MS} ms; output: ${MAX_OUTPUT_BYTES} bytes per stream.`,
+        : `Run a developer command without a shell under local operation policy. Dependency installs, project scripts and unclassified commands need local approval or an exact command rule; Full Access is not required. Commands run on the host, not in an OS sandbox. Use read_file/write_file/edit_file for source or text instead of passing large file contents in command arguments. cwd must stay inside an allowed root unless approved. Timeout: ${MAX_TIMEOUT_MS} ms; output: ${MAX_OUTPUT_BYTES} bytes per stream.`,
       permission: 'command',
       inputSchema: RunCommandInput,
       annotations: {

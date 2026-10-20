@@ -7,7 +7,7 @@ export const PERMISSION_GROUPS = Object.freeze([
       ['read', 'Read files'],
       ['write', 'Write files'],
       ['command', 'Run commands'],
-      ['dangerous', 'Dangerous commands'],
+      ['dangerous', 'Sensitive / unclassified commands'],
       ['outsideRoot', 'Outside workspace']
     ])
   }),
